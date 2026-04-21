@@ -198,7 +198,7 @@ export default function App() {
   const createNewSession = () => {
     const newSession: ChatSession = {
       id: generateId(),
-      title: 'New LUX session',
+      title: 'New Privé session',
       messages: [],
       createdAt: Date.now(),
       updatedAt: Date.now()
@@ -287,7 +287,7 @@ export default function App() {
       if (!activeSession) {
         const newSession: ChatSession = {
           id: sessionId,
-          title: currentInput.slice(0, 30) || 'New LUX Session',
+          title: currentInput.slice(0, 30) || 'New Privé Session',
           messages: [userMessage],
           createdAt: Date.now(),
           updatedAt: Date.now()
@@ -334,7 +334,7 @@ export default function App() {
       });
 
       const model = settings.model || DEFAULT_MODEL;
-      let sysInstruction = "You are LUX, an ultra-premium, luxury AI assistant. You speak with confidence and precision. MANDATORY: All data tables must be formatted as Github Flavored Markdown (GFM) tables. Always add a luxury spin to your responses.";
+      let sysInstruction = "You are Privé, an ultra-premium, luxury AI assistant. You speak with confidence and precision. MANDATORY: All data tables must be formatted as Github Flavored Markdown (GFM) tables. Always add a luxury spin to your responses.";
       if (settings.maxOutputTokens !== undefined && settings.maxOutputTokens > 0) {
         sysInstruction += ` IMPORTANT: You must strictly adjust and compress your entire answer to fit fully within ${settings.maxOutputTokens} tokens. Do perfectly finish your thoughts and NEVER cut off your response mid-sentence. Be concise if necessary.`;
       }
@@ -422,7 +422,7 @@ export default function App() {
     const doc = new jsPDF();
     let y = 10;
     doc.setFontSize(16);
-    doc.text(`LUX Session: ${session.title}`, 10, y);
+    doc.text(`Privé Session: ${session.title}`, 10, y);
     y += 10;
     doc.setFontSize(10);
     
@@ -484,7 +484,7 @@ export default function App() {
                 <div className="w-9 h-9 rounded-none bg-[var(--accent-app)] flex items-center justify-center text-white shadow-xl">
                   <Sparkles size={22} />
                 </div>
-                <span className="tracking-[0.2em]">LUX</span>
+                <span className="tracking-[0.2em]">PRIVÉ</span>
               </div>
               <button 
                 onClick={() => setSidebarOpen(false)}
@@ -571,7 +571,7 @@ export default function App() {
                <Layout size={18} />
              </button>
              <h1 className="text-lg font-bold tracking-widest truncate scroll-hide max-w-[200px] sm:max-w-md uppercase text-[var(--text-app)]">
-               {getActiveSession()?.title || 'LUX'}
+               {getActiveSession()?.title || 'PRIVÉ'}
              </h1>
           </div>
           
@@ -607,7 +607,7 @@ export default function App() {
               <div className="w-16 h-16 rounded-none bg-[var(--accent-app)] flex items-center justify-center text-white mb-6 animate-pulse">
                 <Sparkles size={32} />
               </div>
-              <h2 className="text-3xl font-black mb-4 tracking-tighter uppercase italic">Welcome to LUX</h2>
+              <h2 className="text-3xl font-black mb-4 tracking-tighter uppercase italic">Welcome to Privé</h2>
               <p className="text-[var(--text-secondary)] mb-8 font-medium">
                 The ultimate secure assistant. All data is stored locally.
               </p>
@@ -703,7 +703,7 @@ export default function App() {
                 />
                 <div className="flex flex-col">
                   <span className="text-[10px] font-black uppercase tracking-[0.4em] text-[var(--accent-app)] mb-1">Processing</span>
-                  <span className="text-xs font-bold text-[var(--text-secondary)] italic">LUX is crafting perfection...</span>
+                  <span className="text-xs font-bold text-[var(--text-secondary)] italic">Privé is crafting perfection...</span>
                 </div>
                 <motion.div 
                   className="absolute inset-0 bg-gradient-to-r from-transparent via-[var(--accent-app)]/5 to-transparent -translate-x-full"
@@ -844,7 +844,7 @@ export default function App() {
             </div>
           </div>
           <div className="text-center mt-3 text-[10px] text-[var(--text-secondary)] uppercase tracking-[0.3em] font-black">
-            LUX ✨ SECURE & BEYOND
+            PRIVÉ ✨ SECURE & BEYOND
           </div>
         </div>
       </div>
@@ -913,18 +913,18 @@ export default function App() {
                       {fetchingModels ? 'Syncing...' : 'Sync Models'} <RefreshCw size={10} className={fetchingModels ? 'animate-spin' : ''} />
                     </button>
                   </label>
-                  <input 
-                    list="available-models"
+                  <select
                     value={settings.model}
                     onChange={(e) => setSettings(s => ({ ...s, model: e.target.value }))}
-                    placeholder="e.g. gemini-3.1-pro-preview"
                     className="w-full bg-slate-50 dark:bg-slate-800 border border-[var(--border-app)] rounded-none py-3 px-4 focus:outline-none focus:ring-1 focus:ring-[var(--accent-app)] transition-all font-mono text-sm text-[var(--accent-app)]"
-                  />
-                  <datalist id="available-models">
+                  >
+                    {settings.model && !availableModels.includes(settings.model) && (
+                      <option value={settings.model}>{settings.model}</option>
+                    )}
                     {availableModels.map(m => (
-                      <option key={m} value={m} />
+                      <option key={m} value={m}>{m}</option>
                     ))}
-                  </datalist>
+                  </select>
                   <p className="text-[10px] text-[var(--text-secondary)] mt-1 uppercase tracking-wider">Sync models to populate the dropdown.</p>
                 </div>
 

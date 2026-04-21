@@ -1,7 +1,7 @@
 <?xml version='1.0' encoding='utf-8'?>
 <resources>
-    <string name="app_name">LUX</string>
-    <string name="title_activity_main">LUX</string>
+    <string name="app_name">Privé</string>
+    <string name="title_activity_main">Privé</string>
     <string name="package_name">com.luxai.app</string>
     <string name="custom_url_scheme">com.luxai.app</string>
 </resources>

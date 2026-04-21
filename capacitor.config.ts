@@ -2,7 +2,7 @@ import { CapacitorConfig } from '@capacitor/cli';
 
 const config: CapacitorConfig = {
   appId: 'com.luxai.app',
-  appName: 'LUX',
+  appName: 'Privé',
   webDir: 'dist',
   server: {
     androidScheme: 'https'
