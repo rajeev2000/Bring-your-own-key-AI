@@ -38,7 +38,7 @@ import Markdown from 'react-native-markdown-display';
 import { GoogleGenAI } from '@google/genai';
 import * as DocumentPicker from 'expo-document-picker';
 import * as ImagePicker from 'expo-image-picker';
-import * as FileSystem from 'expo-file-system';
+import * as FileSystem from 'expo-file-system/legacy';
 import * as Sharing from 'expo-sharing';
 import { StatusBar } from 'expo-status-bar';
 import { styled } from 'nativewind';
@@ -322,6 +322,7 @@ export default function App() {
 
   const downloadImage = async (base64Data: string, filename: string) => {
     try {
+      if (!FileSystem.cacheDirectory) throw new Error("Cache dir missing");
       const uri = `${FileSystem.cacheDirectory}${filename}`;
       await FileSystem.writeAsStringAsync(uri, base64Data, { encoding: FileSystem.EncodingType.Base64 });
       if (await Sharing.isAvailableAsync()) {

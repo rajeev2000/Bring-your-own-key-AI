@@ -1041,6 +1041,8 @@ export default function App() {
                           step="128"
                           value={settings.maxOutputTokens ?? 2048}
                           onChange={(e) => setSettings(s => ({ ...s, maxOutputTokens: Number(e.target.value) }))}
+                          onMouseUp={() => setShowParamMenu(false)}
+                          onTouchEnd={() => setShowParamMenu(false)}
                           className="w-full h-1 bg-[#111111] rounded-lg appearance-none cursor-pointer accent-[#0070f3]"
                         />
                       </div>
