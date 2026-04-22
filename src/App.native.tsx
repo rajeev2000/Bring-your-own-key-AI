@@ -29,13 +29,17 @@ import {
   ChevronLeft,
   Settings2,
   ChevronRight,
-  Sliders
+  ChevronDown,
+  Sliders,
+  Download
 } from 'lucide-react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import Markdown from 'react-native-markdown-display';
 import { GoogleGenAI } from '@google/genai';
 import * as DocumentPicker from 'expo-document-picker';
 import * as ImagePicker from 'expo-image-picker';
+import * as FileSystem from 'expo-file-system';
+import * as Sharing from 'expo-sharing';
 import { StatusBar } from 'expo-status-bar';
 import { styled } from 'nativewind';
 
@@ -45,6 +49,8 @@ const StyledView = styled(View);
 const StyledText = styled(Text);
 const StyledScrollView = styled(ScrollView);
 const StyledTextInput = styled(TextInput);
+const StyledTouchableOpacity = styled(TouchableOpacity);
+const StyledSafeAreaView = styled(SafeAreaView);
 
 export default function App() {
   const [sessions, setSessions] = useState<ChatSession[]>([]);
@@ -57,12 +63,12 @@ export default function App() {
   const [attachments, setAttachments] = useState<any[]>([]);
   const [availableModels, setAvailableModels] = useState<string[]>([]);
   const [fetchingModels, setFetchingModels] = useState(false);
+  const [showStrategy, setShowStrategy] = useState(false);
   
   const [settings, setSettings] = useState<AppSettings>({
     apiKey: '',
     baseUrl: DEFAULT_BASE_URL,
     model: DEFAULT_MODEL,
-    temperature: 0.7,
     maxOutputTokens: 2048
   });
 
@@ -127,6 +133,7 @@ export default function App() {
   const getActiveSession = () => sessions.find(s => s.id === activeSessionId);
 
   const createNewSession = () => {
+    setError(null);
     const newSession: ChatSession = {
       id: generateId(),
       title: 'New Privé AI Session',
@@ -141,15 +148,40 @@ export default function App() {
 
   const pickDocument = async () => {
     try {
-      const result = await DocumentPicker.getDocumentAsync({ type: '*/*', copyToCacheDirectory: true });
+      const result = await DocumentPicker.getDocumentAsync({ 
+        type: '*/*', 
+        copyToCacheDirectory: true 
+      });
+      
       if (!result.canceled && result.assets) {
-        // In a real app, process file to base64
-        // For brevity, using placeholder
-        setAttachments(prev => [...prev, { name: result.assets[0].name, type: result.assets[0].mimeType || 'application/octet-stream', data: '' }]);
+        const asset = result.assets[0];
+        const isTextFile = asset.mimeType?.startsWith('text/') || 
+                          ['application/json', 'application/javascript'].includes(asset.mimeType || '') ||
+                          asset.name.endsWith('.txt') || asset.name.endsWith('.md') || 
+                          asset.name.endsWith('.js') || asset.name.endsWith('.json');
+        
+        const newAtt = {
+          name: asset.name,
+          type: asset.mimeType || 'application/octet-stream',
+          size: asset.size
+        };
+
+        if (isTextFile) {
+           const content = await FileSystem.readAsStringAsync(asset.uri, { encoding: 'utf8' });
+           setAttachments(prev => [...prev, { ...newAtt, isText: true, content }]);
+        } else {
+           const base64 = await FileSystem.readAsStringAsync(asset.uri, { encoding: 'base64' });
+           setAttachments(prev => [...prev, { ...newAtt, isText: false, data: base64 }]);
+        }
       }
     } catch (e) {
       console.error(e);
+      setError("Secure Protocol Failure: Could not ingest the requested asset.");
     }
+  };
+
+  const removeAttachment = (index: number) => {
+    setAttachments(prev => prev.filter((_, i) => i !== index));
   };
 
   const handleSendMessage = async () => {
@@ -161,6 +193,7 @@ export default function App() {
     }
 
     const currentInput = input;
+    const currentAttachments = [...attachments];
     setInput('');
     setAttachments([]);
     setError(null);
@@ -173,8 +206,10 @@ export default function App() {
       role: 'user',
       content: currentInput,
       timestamp: Date.now(),
+      attachments: currentAttachments.length > 0 ? currentAttachments : undefined
     };
 
+    let updatedSessions: ChatSession[] = [];
     if (!activeSession) {
       const newSession: ChatSession = {
         id: sessionId,
@@ -183,30 +218,97 @@ export default function App() {
         createdAt: Date.now(),
         updatedAt: Date.now()
       };
-      setSessions([newSession, ...sessions]);
+      updatedSessions = [newSession, ...sessions];
+      setSessions(updatedSessions);
       setActiveSessionId(sessionId);
     } else {
-      setSessions(prev => prev.map(s => s.id === sessionId ? { ...s, messages: [...s.messages, userMessage], updatedAt: Date.now() } : s));
+      updatedSessions = sessions.map(s => s.id === sessionId ? { ...s, messages: [...s.messages, userMessage], updatedAt: Date.now() } : s);
+      setSessions(updatedSessions);
     }
 
     setLoadingSessions(prev => new Set(prev).add(sessionId));
 
     try {
+      const isImageRequest = currentInput.toLowerCase().startsWith('/imagine ') || currentInput.toLowerCase().startsWith('/image ');
       const ai = new GoogleGenAI({ apiKey: settings.apiKey });
-      const model = ai.getGenerativeModel({ model: settings.model || DEFAULT_MODEL });
+      const currentSession = updatedSessions.find(s => s.id === sessionId)!;
       
-      const result = await model.generateContent(currentInput);
-      const response = await result.response;
-      const text = response.text();
+      if (isImageRequest) {
+        const prompt = currentInput.replace(/^\/(imagine|image)\s+/i, '');
+        const response = await ai.models.generateImages({
+          model: 'imagen-3.0-generate-002',
+          prompt,
+          config: { numberOfImages: 1, outputMimeType: 'image/jpeg' }
+        });
+        
+        const base64 = response.generatedImages?.[0]?.image?.imageBytes;
+        
+        const aiMessage: Message = {
+          id: generateId(),
+          role: 'assistant',
+          content: '',
+          timestamp: Date.now(),
+          attachments: base64 ? [{
+            name: `generated_${Date.now()}.jpg`,
+            type: 'image/jpeg',
+            data: base64,
+            isText: false
+          }] : undefined
+        };
+        setSessions(prev => prev.map(s => s.id === sessionId ? { ...s, messages: [...s.messages, aiMessage], updatedAt: Date.now() } : s));
+      } else {
+        const contents = currentSession.messages.map(m => {
+          const parts: any[] = [{ text: m.content || '' }];
+          if (m.attachments) {
+            m.attachments.forEach(att => {
+              if (att.isText) {
+                parts.push({ text: `\n[FILE: ${att.name}]\n${att.content}\n[END FILE]` });
+              } else {
+                parts.push({
+                  inlineData: {
+                    data: att.data,
+                    mimeType: att.type
+                  }
+                });
+              }
+            });
+          }
+          return {
+            role: m.role === 'assistant' ? 'model' : m.role,
+            parts
+          };
+        });
 
-      const aiMessage: Message = {
-        id: generateId(),
-        role: 'assistant',
-        content: text,
-        timestamp: Date.now(),
-      };
+        const result = await ai.models.generateContent({
+          model: settings.model || DEFAULT_MODEL,
+          contents
+        });
+        
+        const parts = result.candidates?.[0]?.content?.parts || [];
+        const text = parts.map(p => p.text || '').join('');
+        
+        const generatedAttachments: any[] = [];
+        parts.forEach(p => {
+           if (p.inlineData?.data) {
+              generatedAttachments.push({
+                 name: `generated_${Date.now()}.png`,
+                 type: p.inlineData.mimeType || 'image/png',
+                 data: p.inlineData.data,
+                 isText: false
+              });
+           }
+        });
 
-      setSessions(prev => prev.map(s => s.id === sessionId ? { ...s, messages: [...s.messages, aiMessage], updatedAt: Date.now() } : s));
+        const aiMessage: Message = {
+          id: generateId(),
+          role: 'assistant',
+          content: text || (generatedAttachments.length ? '' : 'No response from AI.'),
+          timestamp: Date.now(),
+          attachments: generatedAttachments.length > 0 ? generatedAttachments : undefined
+        };
+
+        setSessions(prev => prev.map(s => s.id === sessionId ? { ...s, messages: [...s.messages, aiMessage], updatedAt: Date.now() } : s));
+      }
     } catch (err: any) {
       setError(err.message || 'An unexpected error occurred.');
     } finally {
@@ -218,137 +320,259 @@ export default function App() {
     }
   };
 
+  const downloadImage = async (base64Data: string, filename: string) => {
+    try {
+      const uri = `${FileSystem.cacheDirectory}${filename}`;
+      await FileSystem.writeAsStringAsync(uri, base64Data, { encoding: FileSystem.EncodingType.Base64 });
+      if (await Sharing.isAvailableAsync()) {
+        await Sharing.shareAsync(uri);
+      } else {
+        setError('Sharing is not available on this device');
+      }
+    } catch (e) {
+      console.error(e);
+      setError('Could not download image.');
+    }
+  };
+
   return (
-    <SafeAreaView className="flex-1 bg-bg-app">
+    <StyledSafeAreaView className="flex-1 bg-black">
       <StatusBar style="light" />
       
       {/* Header */}
-      <StyledView className="h-14 flex-row items-center justify-between px-4 border-b border-border-app bg-card-app">
-        <TouchableOpacity onPress={() => setSidebarOpen(true)}>
-          <Layout size={24} color="#3b82f6" />
-        </TouchableOpacity>
-        <StyledText className="text-white font-bold tracking-[0.2em] text-lg uppercase">Privé AI</StyledText>
-        <TouchableOpacity onPress={() => setShowSettings(true)}>
-          <Settings2 size={24} color="#3b82f6" />
-        </TouchableOpacity>
+      <StyledView className="h-16 flex-row items-center justify-between px-6 border-b border-[#111111] bg-black">
+        <StyledTouchableOpacity onPress={() => setSidebarOpen(true)} className="p-2">
+          <Layout size={22} color="#3b82f6" />
+        </StyledTouchableOpacity>
+        <StyledText className="text-white font-black tracking-[0.3em] text-lg uppercase italic">Privé AI</StyledText>
+        <StyledTouchableOpacity onPress={() => setShowSettings(true)} className="p-2">
+          <Settings2 size={22} color="#3b82f6" />
+        </StyledTouchableOpacity>
       </StyledView>
 
       {/* Chat Area */}
       <StyledScrollView 
         ref={scrollRef}
-        className="flex-1 p-4"
-        contentContainerStyle={{ paddingBottom: 100 }}
+        className="flex-1"
+        style={{ backgroundColor: '#000000' }}
+        contentContainerStyle={{ padding: 20, paddingBottom: 40 }}
+        onContentSizeChange={() => scrollRef.current?.scrollToEnd({ animated: true })}
       >
         {(!activeSessionId || getActiveSession()?.messages.length === 0) ? (
           <StyledView className="flex-1 items-center justify-center pt-20">
-            <Sparkles size={48} color="#3b82f6" fill="#3b82f622" />
-            <StyledText className="text-white text-3xl font-black mt-4 tracking-tighter uppercase italic text-center">Welcome to Privé AI</StyledText>
-            <StyledText className="text-gray-400 text-center mt-2 font-medium">The ultimate secure assistant. All data is stored locally.</StyledText>
+            <StyledView className="w-24 h-24 rounded-full bg-[#0a0a0a] border border-[#3b82f6]/20 items-center justify-center shadow-2xl shadow-[#3b82f6]/10 mb-8">
+              <Sparkles size={50} color="#3b82f6" />
+            </StyledView>
+            <StyledText className="text-white text-4xl font-black tracking-tighter uppercase italic text-center">Privé AI</StyledText>
+            <StyledText className="text-[#a1a1aa] text-center mt-4 font-bold tracking-widest uppercase text-[10px]">Architect of Secure Intelligence</StyledText>
+            <StyledView className="mt-12 w-full space-y-4">
+              {[
+                "Analyze Market Integrity",
+                "Strategic Growth Synthesis",
+                "Executive Summary Generation"
+              ].map((txt, i) => (
+                <StyledTouchableOpacity key={i} onPress={() => setInput(txt)} className="bg-[#0a0a0a] border border-[#111111] p-5 rounded-2xl">
+                  <StyledText className="text-white font-bold uppercase tracking-widest text-xs text-center">{txt}</StyledText>
+                </StyledTouchableOpacity>
+              ))}
+            </StyledView>
           </StyledView>
         ) : (
           getActiveSession()?.messages.map((m) => (
-            <StyledView key={m.id} className={`mb-6 ${m.role === 'user' ? 'items-end' : 'items-start'}`}>
-              <StyledView className={`max-w-[85%] p-4 rounded-lg ${m.role === 'user' ? 'bg-accent-app' : 'bg-card-app border border-border-app'}`}>
+            <StyledView key={m.id} className={`mb-10 ${m.role === 'user' ? 'items-end' : 'items-start'}`}>
+              <StyledView className={`max-w-[90%] p-6 rounded-3xl ${m.role === 'user' ? 'bg-[#3b82f6] shadow-xl shadow-[#3b82f6]/20 rounded-tr-none' : 'bg-[#0a0a0a] border border-[#111111] rounded-tl-none shadow-xl'}`}>
                 <Markdown style={{
-                  body: { color: 'white', fontSize: 16 },
-                  hr: { backgroundColor: '#1a1a1a' },
-                  code_inline: { backgroundColor: '#1a1a1a', color: '#ff79c6' },
-                  fence: { backgroundColor: '#1a1a1a', borderRadius: 8, padding: 10 },
+                  body: { color: 'white', fontSize: 16, lineHeight: 24 },
+                  hr: { backgroundColor: '#111111' },
+                  code_inline: { backgroundColor: '#111111', color: '#3b82f6', padding: 4, borderRadius: 4 },
+                  fence: { backgroundColor: '#0a0a0a', borderRadius: 12, padding: 15, borderWidth: 1, borderColor: '#111111' },
+                  blockquote: { backgroundColor: '#0a0a0a', borderLeftColor: '#3b82f6', borderLeftWidth: 4, paddingHorizontal: 15 },
+                  table: { borderColor: '#111111', borderWidth: 1, borderRadius: 8 },
+                  tr: { borderBottomColor: '#111111', borderBottomWidth: 1 },
+                  th: { backgroundColor: '#0a0a0a', color: '#3b82f6', fontWeight: 'bold' }
                 }}>
                   {m.content}
                 </Markdown>
-                <StyledText className="text-gray-400 text-[10px] mt-2 text-right">
-                  {new Date(m.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-                </StyledText>
+                <StyledView className="flex-row items-center justify-between mt-4">
+                  <StyledText className="text-[#a1a1aa] text-[10px] uppercase font-bold tracking-widest">
+                    {new Date(m.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                  </StyledText>
+                  {m.role === 'assistant' && (
+                    <StyledView className="bg-black/50 px-2 py-0.5 rounded-full border border-[#3b82f6]/20">
+                       <StyledText className="text-[#3b82f6] text-[8px] font-black uppercase tracking-widest">Validated</StyledText>
+                    </StyledView>
+                  )}
+                </StyledView>
+                {m.attachments && m.attachments.length > 0 && (
+                  <StyledView className="mt-4 flex-row flex-wrap">
+                    {m.attachments.map((att, idx) => (
+                      <StyledView key={idx} className="mr-2 mb-2 p-1 bg-black/10 rounded-xl relative">
+                        {att.type.startsWith('image/') ? (
+                          <StyledView>
+                            <Image 
+                              source={{ uri: `data:${att.type};base64,${att.data}` }} 
+                              style={{ width: 250, height: 250, borderRadius: 12, borderWidth: 1, borderColor: '#3b82f655' }} 
+                              resizeMode="cover"
+                            />
+                            <StyledTouchableOpacity 
+                              onPress={() => downloadImage(att.data as string, att.name)}
+                              className="absolute bottom-2 right-2 bg-black/50 p-2 rounded-full border border-[#3b82f6] backdrop-blur-sm"
+                            >
+                              <Download size={18} color="white" />
+                            </StyledTouchableOpacity>
+                          </StyledView>
+                        ) : (
+                          <StyledView className="flex-row items-center p-2">
+                            <FileIcon size={16} color="white" />
+                            <StyledText className="text-white text-[10px] ml-2 truncate max-w-[100px]">{att.name}</StyledText>
+                          </StyledView>
+                        )}
+                      </StyledView>
+                    ))}
+                  </StyledView>
+                )}
               </StyledView>
             </StyledView>
           ))
         )}
         {loadingSessions.has(activeSessionId!) && (
-          <StyledView className="items-start mb-6">
-            <StyledView className="bg-card-app border border-border-app p-4 rounded-lg flex-row items-center space-x-3">
+          <StyledView className="items-start mb-8">
+            <StyledView className="bg-[#0a0a0a] border border-[#111111] p-5 rounded-3xl rounded-tl-none flex-row items-center shadow-xl">
               <ActivityIndicator color="#3b82f6" size="small" />
-              <StyledText className="text-accent-app font-bold uppercase tracking-widest text-[10px]">Privé AI is crafting...</StyledText>
+              <StyledText className="text-[#3b82f6] font-black uppercase tracking-[0.4em] text-[10px] ml-4">Processing Elite Sequence</StyledText>
             </StyledView>
           </StyledView>
         )}
       </StyledScrollView>
 
-      {/* Input */}
-      <StyledView className="absolute bottom-0 left-0 right-0 p-4 bg-bg-app border-t border-border-app">
-        <StyledView className="flex-row items-center bg-card-app border border-border-app rounded-full px-4 py-2 space-x-2">
-          <TouchableOpacity onPress={pickDocument}>
-            <Paperclip size={20} color="#666" />
-          </TouchableOpacity>
+      {/* Input & Action Bar */}
+      <StyledView className="bg-black/90 p-6 border-t border-[#111111]">
+        <StyledView className="flex-row items-center mb-4 space-x-3">
+          <StyledTouchableOpacity 
+             onPress={() => setShowStrategy(!showStrategy)}
+             className="bg-[#0a0a0a] border border-[#111111] rounded-full flex-1 h-10 px-4 flex-row items-center"
+          >
+             <Sparkles size={14} color="#3b82f6" />
+             <StyledText className="text-[#3b82f6] text-xs font-black uppercase tracking-widest ml-3 flex-1" numberOfLines={1}>
+               {settings.model || DEFAULT_MODEL}
+             </StyledText>
+             <ChevronDown size={14} color="#a1a1aa" />
+          </StyledTouchableOpacity>
+          <StyledTouchableOpacity onPress={() => setShowSettings(true)} className="bg-[#0a0a0a] border border-[#111111] rounded-full h-10 px-4 items-center justify-center">
+            <Sliders size={16} color="#a1a1aa" />
+          </StyledTouchableOpacity>
+        </StyledView>
+
+        {showStrategy && (
+           <StyledView className="bg-[#0a0a0a] border border-[#111111] rounded-2xl mb-4 overflow-hidden">
+             {(availableModels.length > 0 ? availableModels : [settings.model || DEFAULT_MODEL]).map(m => (
+               <StyledTouchableOpacity 
+                 key={m} 
+                 onPress={() => {
+                   setSettings(s => ({ ...s, model: m }));
+                   setShowStrategy(false);
+                 }}
+                 className="p-4 border-b border-[#111111]"
+               >
+                 <StyledText className={`text-xs font-black uppercase tracking-widest ${settings.model === m ? 'text-[#3b82f6]' : 'text-white'}`}>{m}</StyledText>
+               </StyledTouchableOpacity>
+             ))}
+           </StyledView>
+        )}
+
+        {attachments.length > 0 && (
+          <StyledScrollView horizontal className="mb-4 flex-row" showsHorizontalScrollIndicator={false}>
+            {attachments.map((file, i) => (
+              <StyledView key={i} className="bg-[#0a0a0a] border border-[#111111] p-3 rounded-2xl flex-row items-center mr-3">
+                <FileIcon size={16} color="#3b82f6" />
+                <StyledText className="text-white text-xs ml-2 mr-3 font-bold" numberOfLines={1}>
+                  {file.name.slice(0, 15)}
+                </StyledText>
+                <StyledTouchableOpacity onPress={() => removeAttachment(i)}>
+                  <X size={14} color="#71717a" />
+                </StyledTouchableOpacity>
+              </StyledView>
+            ))}
+          </StyledScrollView>
+        )}
+
+        <StyledView className="flex-row items-center bg-[#0a0a0a] border border-[#111111] rounded-3xl px-5 py-3 space-x-3 shadow-2xl shadow-[#3b82f6]/5">
+          <StyledTouchableOpacity onPress={pickDocument} className="p-2">
+            <Paperclip size={22} color="#a1a1aa" />
+          </StyledTouchableOpacity>
           <StyledTextInput 
-            className="flex-1 text-white text-base py-1"
-            placeholder="Compose a prompt..."
-            placeholderTextColor="#666"
+            className="flex-1 text-white text-base py-1 font-semibold"
+            placeholder="Initiate prompt..."
+            placeholderTextColor="#333"
             value={input}
             onChangeText={setInput}
             multiline
+            style={{ maxHeight: 120 }}
           />
-          <TouchableOpacity 
-            className={`p-2 rounded-full ${input.trim() ? 'bg-accent-app' : 'bg-transparent'}`}
+          <StyledTouchableOpacity 
+            className={`p-3 rounded-2xl ${input.trim() ? 'bg-[#3b82f6] shadow-xl shadow-[#3b82f6]/20' : 'bg-[#111111]'}`}
             onPress={handleSendMessage}
             disabled={!input.trim()}
           >
-            <Send size={20} color={input.trim() ? 'white' : '#666'} />
-          </TouchableOpacity>
+            <Send size={22} color={input.trim() ? 'white' : '#444'} />
+          </StyledTouchableOpacity>
         </StyledView>
       </StyledView>
 
       {/* Sidebar Modal */}
       <Modal visible={sidebarOpen} animationType="fade" transparent>
         <StyledView className="flex-1 bg-black/80 flex-row">
-          <StyledView className="w-4/5 bg-card-app border-r border-border-app p-6">
+          <StyledView className="w-4/5 bg-card-app border-r border-[#111111] p-6" style={{ backgroundColor: '#0a0a0a' }}>
             <StyledView className="flex-row items-center justify-between mb-8">
               <StyledText className="text-white font-black tracking-widest uppercase text-xl">Sessions</StyledText>
-              <TouchableOpacity onPress={() => setSidebarOpen(false)}>
+              <StyledTouchableOpacity onPress={() => setSidebarOpen(false)}>
                 <X size={24} color="white" />
-              </TouchableOpacity>
+              </StyledTouchableOpacity>
             </StyledView>
             
-            <TouchableOpacity 
+            <StyledTouchableOpacity 
               onPress={createNewSession}
-              className="bg-accent-app py-4 rounded-lg flex-row items-center justify-center space-x-2 mb-6"
+              className="bg-[#3b82f6] py-4 rounded-lg flex-row items-center justify-center space-x-2 mb-6"
             >
               <Plus size={20} color="white" />
-              <StyledText className="text-white font-bold uppercase">New session</StyledText>
-            </TouchableOpacity>
+              <StyledText className="text-white font-bold uppercase tracking-widest">New session</StyledText>
+            </StyledTouchableOpacity>
 
             <StyledScrollView>
               {sessions.map(s => (
-                <TouchableOpacity 
+                <StyledTouchableOpacity 
                   key={s.id}
-                  onPress={() => { setActiveSessionId(s.id); setSidebarOpen(false); }}
-                  className={`p-4 rounded-lg flex-row items-center space-x-3 mb-2 ${activeSessionId === s.id ? 'bg-accent-app/20 border border-accent-app' : 'bg-transparent'}`}
+                  onPress={() => { setActiveSessionId(s.id); setError(null); setSidebarOpen(false); }}
+                  className={`p-4 rounded-lg flex-row items-center space-x-3 mb-2 ${activeSessionId === s.id ? 'bg-[#3b82f6]/20 border border-[#3b82f6]' : 'bg-transparent'}`}
                 >
-                  <MessageSquare size={18} color={activeSessionId === s.id ? '#3b82f6' : '#666'} />
-                  <StyledText className={`flex-1 text-sm ${activeSessionId === s.id ? 'text-white font-bold' : 'text-gray-400'}`}>{s.title}</StyledText>
-                </TouchableOpacity>
+                  <MessageSquare size={18} color={activeSessionId === s.id ? '#3b82f6' : '#71717a'} />
+                  <StyledText className={`flex-1 text-sm ${activeSessionId === s.id ? 'text-white font-bold' : 'text-[#71717a]'}`}>{s.title}</StyledText>
+                  <StyledTouchableOpacity onPress={() => { setSessions(sessions.filter(ses => ses.id !== s.id)) }}>
+                     <Trash2 size={16} color="#ef4444" />
+                  </StyledTouchableOpacity>
+                </StyledTouchableOpacity>
               ))}
             </StyledScrollView>
           </StyledView>
-          <TouchableOpacity className="flex-1" onPress={() => setSidebarOpen(false)} />
+          <StyledTouchableOpacity className="flex-1" onPress={() => setSidebarOpen(false)} />
         </StyledView>
       </Modal>
 
       {/* Settings Modal */}
       <Modal visible={showSettings} animationType="slide">
-        <StyledView className="flex-1 bg-bg-app p-6">
+        <StyledView className="flex-1 bg-[#000000] p-6">
           <StyledView className="flex-row items-center justify-between mt-10 mb-8">
             <StyledText className="text-white text-2xl font-black tracking-widest uppercase">Preferences</StyledText>
-            <TouchableOpacity onPress={() => setShowSettings(false)}>
+            <StyledTouchableOpacity onPress={() => setShowSettings(false)}>
               <X size={28} color="white" />
-            </TouchableOpacity>
+            </StyledTouchableOpacity>
           </StyledView>
 
           <StyledScrollView className="flex-1">
             <StyledView className="mb-6">
-              <StyledText className="text-accent-app font-bold uppercase text-xs mb-2 tracking-widest">API Key</StyledText>
+              <StyledText className="text-[#3b82f6] font-bold uppercase text-xs mb-2 tracking-widest">API Key</StyledText>
               <StyledTextInput 
-                className="bg-card-app border border-border-app p-4 rounded-lg text-white font-mono"
+                className="bg-[#0a0a0a] border border-[#111111] p-4 rounded-lg text-white font-mono"
                 placeholder="Enter Gemini API Key"
                 placeholderTextColor="#444"
                 secureTextEntry
@@ -356,40 +580,13 @@ export default function App() {
                 onChangeText={(text) => setSettings(s => ({ ...s, apiKey: text }))}
               />
             </StyledView>
-
-            <StyledView className="mb-6">
-              <StyledView className="flex-row items-center justify-between mb-2">
-                <StyledText className="text-accent-app font-bold uppercase text-xs tracking-widest">Designation</StyledText>
-                <TouchableOpacity onPress={fetchModels}>
-                    <StyledText className="text-accent-app text-[10px] uppercase font-bold">Sync Models</StyledText>
-                </TouchableOpacity>
-              </StyledView>
-              <StyledView className="bg-card-app border border-border-app rounded-lg overflow-hidden">
-                <Picker
-                  selectedValue={settings.model}
-                  onValueChange={(itemValue) => setSettings(s => ({ ...s, model: itemValue }))}
-                  style={{ color: '#3b82f6', height: 50 }}
-                  dropdownIconColor="#3b82f6"
-                >
-                  <Picker.Item label="Select Model" value="" color="#666" />
-                  {availableModels.length > 0 ? (
-                    availableModels.map(m => (
-                      <Picker.Item key={m} label={m} value={m} />
-                    ))
-                  ) : (
-                    <Picker.Item label={settings.model || DEFAULT_MODEL} value={settings.model || DEFAULT_MODEL} />
-                  )}
-                </Picker>
-              </StyledView>
-              <StyledText className="text-gray-500 text-[10px] mt-1 uppercase">Sync to populate models.</StyledText>
-            </StyledView>
             
-            <TouchableOpacity 
+            <StyledTouchableOpacity 
               onPress={() => setShowSettings(false)}
-              className="bg-accent-app py-5 rounded-lg mt-10"
+              className="bg-[#3b82f6] py-5 rounded-lg mt-10"
             >
               <StyledText className="text-white text-center font-bold tracking-widest uppercase">Apply Changes</StyledText>
-            </TouchableOpacity>
+            </StyledTouchableOpacity>
           </StyledScrollView>
         </StyledView>
       </Modal>
@@ -398,11 +595,11 @@ export default function App() {
         <StyledView className="absolute top-20 left-4 right-4 bg-red-900/80 p-4 border border-red-500 rounded-lg flex-row items-center space-x-3">
           <X size={20} color="white" />
           <StyledText className="text-white text-sm flex-1">{error}</StyledText>
-          <TouchableOpacity onPress={() => setError(null)}>
-            <Text className="text-white font-bold ml-2">X</Text>
-          </TouchableOpacity>
+          <StyledTouchableOpacity onPress={() => setError(null)}>
+            <StyledText className="text-white font-bold ml-2">X</StyledText>
+          </StyledTouchableOpacity>
         </StyledView>
       )}
-    </SafeAreaView>
+    </StyledSafeAreaView>
   );
 }

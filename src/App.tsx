@@ -18,6 +18,7 @@ import {
   Download, 
   ExternalLink,
   ChevronRight,
+  ChevronDown,
   MoreVertical,
   X,
   Sparkles,
@@ -49,8 +50,10 @@ export default function App() {
   const [error, setError] = useState<string | null>(null);
   const [showSettings, setShowSettings] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(true);
+  const [isDragging, setIsDragging] = useState(false);
   const [attachments, setAttachments] = useState<any[]>([]);
   const [showParamMenu, setShowParamMenu] = useState(false);
+  const [showStrategy, setShowStrategy] = useState(false);
   const [availableModels, setAvailableModels] = useState<string[]>([]);
   const [fetchingModels, setFetchingModels] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -196,6 +199,7 @@ export default function App() {
   const isSessionLoading = (id: string | null) => id ? loadingSessions.has(id) : false;
 
   const createNewSession = () => {
+    setError(null);
     const newSession: ChatSession = {
       id: generateId(),
       title: 'New Privé AI session',
@@ -219,33 +223,95 @@ export default function App() {
     const files = e.target.files;
     if (!files) return;
     processFiles(files);
+    if (fileInputRef.current) fileInputRef.current.value = '';
   };
 
   const processFiles = (files: FileList | File[]) => {
+    const MAX_FILE_SIZE = 20 * 1024 * 1024; // 20MB limit
+    
     Array.from(files).forEach(file => {
+      if (file.size > MAX_FILE_SIZE) {
+        setError(`Secure Protocol: Item "${file.name}" exceeds 20MB threshold.`);
+        setTimeout(() => setError(null), 5000);
+        return;
+      }
+
+      const isTextFile = file.type.startsWith('text/') || 
+                         ['application/json', 'application/javascript', 'text/javascript', 'application/xml'].includes(file.type) ||
+                         file.name.endsWith('.md') || file.name.endsWith('.txt') || file.name.endsWith('.csv') || file.name.endsWith('.log');
+
       const reader = new FileReader();
       reader.onload = (event) => {
-        const base64 = (event.target?.result as string).split(',')[1];
-        setAttachments(prev => [...prev, {
-          name: file.name,
-          type: file.type,
-          data: base64
-        }]);
+        const result = event.target?.result as string;
+        
+        setAttachments(prev => {
+          // Prevent duplicates by name and size
+          if (prev.some(a => a.name === file.name && a.size === file.size)) return prev;
+          
+          if (isTextFile) {
+            return [...prev, {
+              name: file.name,
+              type: file.type,
+              size: file.size,
+              isText: true,
+              content: result
+            }];
+          } else {
+            const base64 = result.split(',')[1];
+            return [...prev, {
+              name: file.name,
+              type: file.type,
+              size: file.size,
+              isText: false,
+              data: base64
+            }];
+          }
+        });
       };
-      reader.readAsDataURL(file);
+
+      if (isTextFile) {
+        reader.readAsText(file);
+      } else {
+        reader.readAsDataURL(file);
+      }
     });
   };
 
   const handleDragOver = (e: React.DragEvent) => {
     e.preventDefault();
     e.stopPropagation();
+    if (!isDragging) setIsDragging(true);
+  };
+
+  const handleDragLeave = (e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    // Only set to false if we're actually leaving the container
+    if (e.currentTarget === e.target) {
+      setIsDragging(false);
+    }
   };
 
   const handleDrop = (e: React.DragEvent) => {
     e.preventDefault();
     e.stopPropagation();
+    setIsDragging(false);
     if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
       processFiles(e.dataTransfer.files);
+    }
+  };
+
+  const handlePaste = (e: React.ClipboardEvent) => {
+    const items = e.clipboardData.items;
+    const files: File[] = [];
+    for (let i = 0; i < items.length; i++) {
+      if (items[i].kind === 'file') {
+        const file = items[i].getAsFile();
+        if (file) files.push(file);
+      }
+    }
+    if (files.length > 0) {
+      processFiles(files);
     }
   };
 
@@ -316,15 +382,19 @@ export default function App() {
       const currentSession = updatedSessions.find(s => s.id === sessionId)!;
       
       const history = currentSession.messages.map(m => {
-        const parts: any[] = [{ text: m.content }];
+        const parts: any[] = [{ text: m.content || '' }];
         if (m.attachments) {
           m.attachments.forEach(att => {
-            parts.push({
-              inlineData: {
-                data: att.data,
-                mimeType: att.type
-              }
-            });
+            if (att.isText) {
+              parts.push({ text: `\n[FILE: ${att.name}]\n${att.content}\n[END FILE]` });
+            } else {
+              parts.push({
+                inlineData: {
+                  data: att.data,
+                  mimeType: att.type
+                }
+              });
+            }
           });
         }
         return {
@@ -333,74 +403,134 @@ export default function App() {
         };
       });
 
+      const isImageRequest = currentInput.toLowerCase().startsWith('/imagine ') || currentInput.toLowerCase().startsWith('/image ');
       const model = settings.model || DEFAULT_MODEL;
-      let sysInstruction = "You are Privé AI, an ultra-premium, luxury AI assistant. You speak with confidence and precision. MANDATORY: All data tables must be formatted as Github Flavored Markdown (GFM) tables. Always add a luxury spin to your responses.";
-      if (settings.maxOutputTokens !== undefined && settings.maxOutputTokens > 0) {
-        sysInstruction += ` IMPORTANT: You must strictly adjust and compress your entire answer to fit fully within ${settings.maxOutputTokens} tokens. Do perfectly finish your thoughts and NEVER cut off your response mid-sentence. Be concise if necessary.`;
-      }
-      
-      const configOpts: any = {
-        systemInstruction: sysInstruction
-      };
-      if (settings.temperature !== undefined) configOpts.temperature = Number(settings.temperature);
-      if (settings.maxOutputTokens !== undefined) configOpts.maxOutputTokens = Number(settings.maxOutputTokens);
 
-      const startTime = Date.now();
-      const responseStream = await ai.models.generateContentStream({
-        model: model,
-        contents: history,
-        config: configOpts
-      });
-
-      const assistantMessageId = generateId();
-      const assistantMessage: Message = {
-        id: assistantMessageId,
-        role: 'assistant',
-        content: '',
-        timestamp: Date.now(),
-        isStreaming: true
-      };
-
-      setSessions(prev => prev.map(s => {
-        if (s.id === sessionId) {
-          return {
-            ...s,
-            messages: [...s.messages, assistantMessage],
-            updatedAt: Date.now()
-          };
-        }
-        return s;
-      }));
-
-      let fullText = '';
-      let finalTokens = 0;
-      for await (const chunk of responseStream) {
-        fullText += (chunk.text || '');
-        if (chunk.usageMetadata) finalTokens = chunk.usageMetadata.candidatesTokenCount;
+      if (isImageRequest) {
+        const prompt = currentInput.replace(/^\/(imagine|image)\s+/i, '');
+        const startTime = Date.now();
+        const response = await ai.models.generateImages({
+          model: 'imagen-3.0-generate-002',
+          prompt,
+          config: { numberOfImages: 1, outputMimeType: 'image/jpeg' }
+        });
+        
+        const base64 = response.generatedImages?.[0]?.image?.imageBytes;
+        const responseTime = (Date.now() - startTime) / 1000;
+        
+        const assistantMessage: Message = {
+          id: generateId(),
+          role: 'assistant',
+          content: '',
+          timestamp: Date.now(),
+          responseTime,
+          attachments: base64 ? [{
+            name: `generated_${Date.now()}.jpg`,
+            type: 'image/jpeg',
+            data: base64,
+            isText: false
+          }] : undefined
+        };
+        
         setSessions(prev => prev.map(s => {
           if (s.id === sessionId) {
             return {
               ...s,
-              messages: s.messages.map(m => m.id === assistantMessageId ? { ...m, content: fullText } : m),
+              messages: [...s.messages, assistantMessage],
+              updatedAt: Date.now()
+            };
+          }
+          return s;
+        }));
+      } else {
+        let sysInstruction = "You are Privé AI, an ultra-premium, luxury AI assistant. You speak with confidence and precision. MANDATORY: All data tables must be formatted as Github Flavored Markdown (GFM) tables. Always add a luxury spin to your responses.";
+        if (settings.maxOutputTokens !== undefined && settings.maxOutputTokens > 0) {
+          sysInstruction += ` IMPORTANT: You must strictly adjust and compress your entire answer to fit fully within ${settings.maxOutputTokens} tokens. Do perfectly finish your thoughts and NEVER cut off your response mid-sentence. Be concise if necessary.`;
+        }
+        
+        const configOpts: any = {
+          systemInstruction: sysInstruction
+        };
+        if (settings.temperature !== undefined) configOpts.temperature = Number(settings.temperature);
+        if (settings.maxOutputTokens !== undefined) configOpts.maxOutputTokens = Number(settings.maxOutputTokens);
+
+        const startTime = Date.now();
+        const responseStream = await ai.models.generateContentStream({
+          model: model,
+          contents: history,
+          config: configOpts
+        });
+
+        const assistantMessageId = generateId();
+        const assistantMessage: Message = {
+          id: assistantMessageId,
+          role: 'assistant',
+          content: '',
+          timestamp: Date.now(),
+          isStreaming: true
+        };
+
+        setSessions(prev => prev.map(s => {
+          if (s.id === sessionId) {
+            return {
+              ...s,
+              messages: [...s.messages, assistantMessage],
+              updatedAt: Date.now()
+            };
+          }
+          return s;
+        }));
+
+        let fullText = '';
+        let finalTokens = 0;
+        let generatedAttachments: any[] = [];
+        
+        for await (const chunk of responseStream) {
+          fullText += (chunk.text || '');
+          if (chunk.usageMetadata) finalTokens = chunk.usageMetadata.candidatesTokenCount || 0;
+          
+          if (chunk.candidates?.[0]?.content?.parts) {
+            chunk.candidates[0].content.parts.forEach(p => {
+              if (p.inlineData?.data) {
+                generatedAttachments.push({
+                   name: `generated_${Date.now()}.png`,
+                   type: p.inlineData.mimeType || 'image/png',
+                   data: p.inlineData.data,
+                   isText: false
+                });
+              }
+            });
+          }
+
+          setSessions(prev => prev.map(s => {
+            if (s.id === sessionId) {
+              return {
+                ...s,
+                messages: s.messages.map(m => m.id === assistantMessageId ? { 
+                  ...m, 
+                  content: fullText,
+                  attachments: generatedAttachments.length > 0 ? generatedAttachments : undefined
+                } : m),
+                updatedAt: Date.now()
+              };
+            }
+            return s;
+          }));
+        }
+        
+        const responseTime = (Date.now() - startTime) / 1000;
+
+        setSessions(prev => prev.map(s => {
+          if (s.id === sessionId) {
+            return {
+              ...s,
+              messages: s.messages.map(m => m.id === assistantMessageId ? { ...m, isStreaming: false, tokenCount: finalTokens || undefined, responseTime } : m),
               updatedAt: Date.now()
             };
           }
           return s;
         }));
       }
-      
-      const responseTime = (Date.now() - startTime) / 1000;
-
-      setSessions(prev => prev.map(s => {
-        if (s.id === sessionId) {
-          return {
-            ...s,
-            messages: s.messages.map(m => m.id === assistantMessageId ? { ...m, isStreaming: false, tokenCount: finalTokens || undefined, responseTime } : m),
-            updatedAt: Date.now()
-          };
-        }
-        return s;
-      }));
 
     } catch (err: any) {
       setError(err.message || 'An unexpected error occurred.');
@@ -427,7 +557,7 @@ export default function App() {
     doc.setFontSize(10);
     
     session.messages.forEach(m => {
-      const rolePrefix = m.role === 'user' ? 'User: ' : 'DroidAI: ';
+      const rolePrefix = m.role === 'user' ? 'User: ' : 'Privé AI: ';
       const splitText = doc.splitTextToSize(rolePrefix + m.content, 180);
       
       if (y + splitText.length * 5 > 280) {
@@ -467,18 +597,49 @@ export default function App() {
     setTimeout(() => setCopiedId(null), 2000);
   };
 
+  const handleDownload = async (base64: string, filename: string, mimeType: string) => {
+    try {
+      const response = await fetch(`data:${mimeType};base64,${base64}`);
+      const blob = await response.blob();
+      const url = URL.createObjectURL(blob);
+      
+      const a = document.createElement('a');
+      a.style.display = 'none';
+      a.href = url;
+      a.download = filename || `prive-ai-image-${Date.now()}.jpg`;
+      document.body.appendChild(a);
+      a.click();
+      
+      setTimeout(() => {
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+      }, 100);
+    } catch (err) {
+      console.error('Download extraction failed', err);
+      setError('System could not construct the image file for download. Verify your device policy.');
+    }
+  };
+
   // --- UI Components ---
   return (
     <div className="flex h-screen overflow-hidden bg-[var(--bg-app)] text-[var(--text-app)]">
       {/* Sidebar */}
       <AnimatePresence>
         {sidebarOpen && (
-          <motion.div 
-            initial={{ width: 0, opacity: 0 }}
-            animate={{ width: 300, opacity: 1 }}
-            exit={{ width: 0, opacity: 0 }}
-            className="flex-shrink-0 flex flex-col border-r border-[var(--border-app)] bg-[var(--card-app)] z-20"
-          >
+          <>
+            <motion.div 
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              onClick={() => setSidebarOpen(false)}
+              className="lg:hidden fixed inset-0 bg-black/60 backdrop-blur-sm z-40"
+            />
+            <motion.div 
+              initial={{ width: 0, opacity: 0 }}
+              animate={{ width: 300, opacity: 1 }}
+              exit={{ width: 0, opacity: 0 }}
+              className="flex-shrink-0 flex flex-col border-r border-[var(--border-app)] bg-[var(--card-app)] z-50 fixed lg:relative h-full shadow-2xl lg:shadow-none"
+            >
             <div className="p-4 flex items-center justify-between border-b border-[var(--border-app)]">
               <div className="flex items-center gap-2 font-bold tracking-tighter text-xl">
                 <div className="w-9 h-9 rounded-none bg-[var(--accent-app)] flex items-center justify-center text-white shadow-xl">
@@ -508,7 +669,7 @@ export default function App() {
               {sessions.map(s => (
                 <div 
                   key={s.id}
-                  onClick={() => setActiveSessionId(s.id)}
+                  onClick={() => { setActiveSessionId(s.id); setError(null); }}
                   className={`group relative flex items-center gap-3 p-3 rounded-none cursor-pointer transition-all ${
                     activeSessionId === s.id 
                       ? 'bg-white dark:bg-slate-800 shadow-sm border border-[var(--border-app)]' 
@@ -543,6 +704,7 @@ export default function App() {
               </button>
             </div>
           </motion.div>
+          </>
         )}
       </AnimatePresence>
 
@@ -550,27 +712,44 @@ export default function App() {
       <div 
         className="relative flex-1 flex flex-col min-w-0 bg-[var(--bg-app)]"
         onDragOver={handleDragOver}
+        onDragLeave={handleDragLeave}
         onDrop={handleDrop}
       >
+        <AnimatePresence>
+          {isDragging && (
+            <motion.div 
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              className="absolute inset-0 z-[100] bg-[#0070f3]/10 backdrop-blur-md flex flex-col items-center justify-center border-4 border-dashed border-[#0070f3]/50 m-4 rounded-3xl"
+            >
+              <div className="bg-[#0a0a0a] p-10 rounded-full shadow-2xl scale-110">
+                <Paperclip size={60} className="text-[#0070f3] animate-bounce" />
+              </div>
+              <h3 className="text-2xl font-black text-white mt-8 uppercase tracking-[0.3em]">Drop Intel Here</h3>
+              <p className="text-[#0070f3] font-bold mt-2 uppercase tracking-widest text-xs opacity-80">Encryption Gate Active</p>
+            </motion.div>
+          )}
+        </AnimatePresence>
         {!sidebarOpen && (
           <button 
             onClick={() => setSidebarOpen(true)}
-            className="absolute top-4 left-4 z-10 p-2 bg-white dark:bg-slate-800 border border-[var(--border-app)] rounded-none shadow-sm hover:bg-slate-50 transition-colors text-[var(--text-app)]"
+            className="absolute top-4 left-4 z-40 p-2 bg-[#0a0a0a] border border-[#111111] rounded-full shadow-lg hover:bg-[#111111] transition-all text-[#0070f3]"
           >
-            <ChevronRight size={18} />
+            <ChevronRight size={20} />
           </button>
         )}
 
         {/* Header */}
-        <header className="h-16 flex items-center justify-between px-6 border-b border-[var(--border-app)] backdrop-blur-sm bg-white/80 dark:bg-slate-950/80 sticky top-0 z-10">
+        <header className="h-16 flex items-center justify-between px-6 border-b border-[#111111] bg-[#000000]/80 backdrop-blur-md sticky top-0 z-10 transition-all">
           <div className="flex items-center gap-3">
              <button 
                 onClick={() => setSidebarOpen(true)}
-                className={`md:hidden p-2 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-none transition-colors ${sidebarOpen ? 'hidden' : ''} text-[var(--text-app)]`}
+                className={`lg:hidden p-2 hover:bg-[#0a0a0a] rounded-full transition-colors ${sidebarOpen ? 'hidden' : ''} text-[#0070f3]`}
              >
-               <Layout size={18} />
+               <Layout size={20} />
              </button>
-             <h1 className="text-lg font-bold tracking-widest truncate scroll-hide max-w-[200px] sm:max-w-md uppercase text-[var(--text-app)]">
+             <h1 className="text-lg font-black tracking-[0.2em] truncate scroll-hide max-w-[200px] sm:max-w-md uppercase text-white">
                {getActiveSession()?.title || 'PRIVÉ AI'}
              </h1>
           </div>
@@ -600,31 +779,35 @@ export default function App() {
         {/* Chat Area */}
         <div 
           ref={scrollRef}
-          className="flex-1 overflow-y-auto p-4 sm:p-8 space-y-6 pb-24 scroll-smooth"
+          className="flex-1 overflow-y-auto p-4 sm:p-8 space-y-8 scroll-smooth custom-scrollbar bg-[#000000]"
         >
           {sessions.length === 0 || (activeSessionId && getActiveSession()?.messages.length === 0) ? (
             <div className="h-full flex flex-col items-center justify-center text-center max-w-lg mx-auto">
-              <div className="w-16 h-16 rounded-none bg-[var(--accent-app)] flex items-center justify-center text-white mb-6 animate-pulse">
-                <Sparkles size={32} />
-              </div>
-              <h2 className="text-3xl font-black mb-4 tracking-tighter uppercase italic">Welcome to Privé AI</h2>
-              <p className="text-[var(--text-secondary)] mb-8 font-medium">
-                The ultimate secure assistant. All data is stored locally.
+              <motion.div 
+                initial={{ scale: 0.8, opacity: 0 }}
+                animate={{ scale: 1, opacity: 1 }}
+                className="w-20 h-20 rounded-full bg-[#0a0a0a] border border-[#0070f3]/20 flex items-center justify-center text-[#0070f3] mb-8 shadow-2xl shadow-[#0070f3]/10"
+              >
+                <Sparkles size={40} />
+              </motion.div>
+              <h2 className="text-4xl font-black mb-4 tracking-tighter uppercase italic text-white leading-none">Privé AI</h2>
+              <p className="text-[#71717a] mb-10 font-medium tracking-wide">
+                Secure. Minimal. Elite. Your private intelligence architecture.
               </p>
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 w-full">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 w-full">
                 {[
-                  { icon: Table, text: "Generate a sales table", cmd: "Create a markdown table for monthly sales data" },
-                  { icon: Layout, text: "Plan my week", cmd: "Help me create a weekly study plan table" },
-                  { icon: Command, text: "Explain complex concepts", cmd: "Explain quantum entanglement like I'm five" },
-                  { icon: FileText, text: "Draft a report", cmd: "Write a short summary report on climate change" }
+                  { icon: Table, text: "Data Visualisation", cmd: "Generate a markdown table for global tech analysis" },
+                  { icon: Layout, text: "Strategic Roadmap", cmd: "Create a 3-month strategic plan for a boutique startup" },
+                  { icon: Command, text: "System Synthesis", cmd: "Explain the core mechanics of privacy-focused AI" },
+                  { icon: FileText, text: "Elite Drafting", cmd: "Draft a concise executive report on market trends" }
                 ].map((item, idx) => (
                   <button 
                     key={idx}
                     onClick={() => setInput(item.cmd)}
-                    className="flex items-center gap-3 p-4 bg-[var(--card-app)] border border-[var(--border-app)] rounded-none hover:border-[var(--accent-app)] transition-all text-left text-sm"
+                    className="flex items-center gap-4 p-5 bg-[#0a0a0a] border border-[#111111] rounded-xl hover:border-[#0070f3] hover:bg-[#111111] transition-all text-left group"
                   >
-                    <item.icon size={18} className="text-[var(--accent-app)]" />
-                    <span>{item.text}</span>
+                    <item.icon size={20} className="text-[#0070f3] group-hover:scale-110 transition-transform" />
+                    <span className="text-white font-bold text-sm uppercase tracking-widest">{item.text}</span>
                   </button>
                 ))}
               </div>
@@ -637,47 +820,59 @@ export default function App() {
                 key={m.id}
                 className={`flex ${m.role === 'user' ? 'justify-end' : 'justify-start'}`}
               >
-                <div className={`max-w-[85%] sm:max-w-[70%] group relative ${
+                <div className={`max-w-[90%] sm:max-w-[80%] group relative ${
                   m.role === 'user' 
-                    ? 'bg-[var(--accent-app)] text-white rounded-sm rounded-tr-none px-4 py-3 shadow-lg shadow-orange-500/10' 
-                    : 'bg-[var(--card-app)] border border-[var(--border-app)] rounded-sm rounded-tl-none px-5 py-4'
+                    ? 'bg-[#0070f3] text-white rounded-3xl rounded-tr-none px-6 py-5 shadow-2xl shadow-[#0070f3]/20' 
+                    : 'bg-[#0a0a0a] border border-[#111111] rounded-3xl rounded-tl-none px-7 py-6 shadow-xl'
                 }`}>
-                  <div className={`markdown-body ${m.role === 'user' ? 'text-white' : ''}`}>
+                  <div className={`markdown-body ${m.role === 'user' ? 'text-white' : 'text-white'}`}>
                     <ReactMarkdown remarkPlugins={[remarkGfm]}>
                       {m.content}
                     </ReactMarkdown>
                   </div>
-                  <div className={`flex items-center justify-between mt-3 text-[10px] ${m.role === 'user' ? 'text-white/70' : 'text-[var(--text-secondary)]'}`}>
-                    <span>{new Date(m.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
-                    <div className="flex items-center gap-2">
+                  <div className={`flex items-center justify-between mt-5 text-[11px] ${m.role === 'user' ? 'text-white/60' : 'text-[#71717a]'}`}>
+                    <span className="font-mono tracking-widest">{new Date(m.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
+                    <div className="flex items-center gap-4">
                        <button 
                          onClick={() => copyToClipboard(m.content, m.id)}
-                         className={`p-1 rounded-sm transition-all ${
+                         className={`p-2 rounded-lg transition-all ${
                            m.role === 'user' 
-                             ? 'hover:bg-white/20' 
-                             : 'hover:bg-slate-200 dark:hover:bg-slate-800'
-                         } text-[var(--text-app)]`}
+                             ? 'hover:bg-white/10' 
+                             : 'hover:bg-[#111111]'
+                         } text-[#3b82f6]`}
                        >
-                         {copiedId === m.id ? <Check size={10} className="text-green-500" /> : <Copy size={10} className={m.role === 'user' ? 'text-white' : 'text-[var(--text-app)]'} />}
+                         {copiedId === m.id ? <Check size={12} className="text-green-400" /> : <Copy size={12} />}
                        </button>
                        {m.role === 'assistant' && (m.tokenCount || m.isStreaming) && (
-                         <span className="flex items-center gap-1 bg-slate-100 dark:bg-slate-900 px-1.5 py-0.5 rounded-sm font-mono text-[var(--text-app)]">
-                           <Sparkles size={8} className={m.isStreaming ? 'animate-pulse' : ''} /> 
-                           {m.isStreaming ? 'Generating...' : `${m.tokenCount} tokens ${m.responseTime ? `• ${m.responseTime.toFixed(1)}s` : ''}`}
+                         <span className="flex items-center gap-2 bg-[#111111] px-3 py-1 rounded-full font-black uppercase tracking-tightest text-[9px] text-[#3b82f6] border border-[#111111]">
+                           <Sparkles size={10} className={m.isStreaming ? 'animate-pulse' : ''} /> 
+                           {m.isStreaming ? 'Crafting' : `${m.tokenCount} Tokens`}
                          </span>
                        )}
                     </div>
                   </div>
                   {m.attachments && (
-                    <div className="mt-3 flex flex-wrap gap-2">
+                    <div className="mt-3 flex flex-wrap gap-4">
                       {m.attachments.map((att, i) => (
-                        <div key={i} className="flex items-center gap-1.5 p-1.5 bg-black/10 dark:bg-white/10 rounded-sm">
+                        <div key={i} className={`flex items-center gap-1.5 ${att.type.startsWith('image/') ? 'w-full' : 'p-1.5 bg-black/10 dark:bg-white/10 rounded-sm'}`}>
                            {att.type.startsWith('image/') ? (
-                             <img src={`data:${att.type};base64,${att.data}`} className="w-10 h-10 object-cover rounded-sm" />
+                             <div className="relative group/dl inline-block max-w-full">
+                               <img src={`data:${att.type};base64,${att.data}`} className="w-full max-w-[400px] h-auto object-contain rounded-xl shadow-lg border border-white/10" />
+                               <button 
+                                 onClick={(e) => { e.preventDefault(); handleDownload(att.data, att.name, att.type); }}
+                                 className="absolute inset-0 bg-black/50 opacity-0 group-hover/dl:opacity-100 flex flex-col items-center justify-center transition-all rounded-xl backdrop-blur-sm"
+                                 title="Download Image"
+                               >
+                                 <Download size={32} className="text-white mb-2" />
+                                 <span className="text-white text-xs font-bold tracking-widest uppercase">Download</span>
+                               </button>
+                             </div>
                            ) : (
-                             <FileIcon size={16} />
+                             <>
+                               <FileIcon size={16} />
+                               <span className="text-[10px] truncate max-w-[100px]">{att.name}</span>
+                             </>
                            )}
-                           <span className="text-[10px] truncate max-w-[100px]">{att.name}</span>
                         </div>
                       ))}
                     </div>
@@ -721,36 +916,99 @@ export default function App() {
           )}
         </div>
 
-        {/* Input Area */}
-        <div className="absolute bottom-0 left-0 right-0 p-4 sm:p-6 bg-gradient-to-t from-[var(--bg-app)] via-[var(--bg-app)] to-transparent pt-10">
-          <div className="max-w-4xl mx-auto space-y-4">
-            {/* Attachment Preview */}
+        {/* Interraction Area (Input & Controls) */}
+        <div className="relative border-t border-[#111111] bg-[#000000] p-2 sm:p-10 transition-all">
+          <div className="max-w-5xl mx-auto space-y-4 sm:space-y-6">
+            
+            {/* Dynamic Action Bar (Consolidated and less floaty) */}
+            <div className="flex flex-wrap items-center gap-2 sm:gap-4 px-3 py-2 sm:px-4 sm:py-3 bg-[#0a0a0a]/50 border border-[#111111] rounded-2xl shadow-xl backdrop-blur-md">
+              <div className="flex items-center gap-2 flex-1 min-w-[200px] relative">
+                 <button 
+                   onClick={() => setShowStrategy(!showStrategy)}
+                   className="flex-1 flex items-center gap-2 sm:gap-3 bg-transparent py-2 group text-left"
+                 >
+                   <div className="text-[#0070f3] opacity-80"><Sparkles size={16} /></div>
+                   <span className="text-[#0070f3] text-xs font-black uppercase tracking-[0.2em] truncate">
+                     {settings.model || DEFAULT_MODEL}
+                   </span>
+                   <ChevronDown size={14} className="text-[#71717a] ml-auto group-hover:text-white transition-colors" />
+                 </button>
+                 
+                 <AnimatePresence>
+                   {showStrategy && (
+                     <motion.div
+                       initial={{ opacity: 0, y: -10 }}
+                       animate={{ opacity: 1, y: 0 }}
+                       exit={{ opacity: 0, y: -10 }}
+                       className="absolute bottom-full left-0 mb-3 w-[calc(100vw-2rem)] sm:w-80 max-w-sm bg-[#0a0a0a] border border-[#111111] rounded-2xl shadow-2xl overflow-hidden z-50 p-2"
+                     >
+                       <div className="max-h-60 overflow-y-auto custom-scrollbar pr-2">
+                         {(availableModels.length > 0 ? availableModels : [settings.model || DEFAULT_MODEL]).map(m => (
+                           <button
+                             key={m}
+                             onClick={() => {
+                               setSettings(s => ({ ...s, model: m }));
+                               setShowStrategy(false);
+                             }}
+                             className={`w-full text-left px-4 py-3 rounded-xl text-xs font-bold uppercase tracking-[0.1em] transition-colors ${settings.model === m ? 'bg-[#0070f3]/10 text-[#0070f3]' : 'text-white hover:bg-[#111111]'}`}
+                           >
+                             {m}
+                           </button>
+                         ))}
+                       </div>
+                     </motion.div>
+                   )}
+                 </AnimatePresence>
+                 
+                 <button 
+                   onClick={() => fetchModels()}
+                   className="p-2 hover:bg-[#111111] rounded-full transition-all text-[#71717a] hover:text-[#0070f3] group"
+                   title="Sync Models"
+                 >
+                   <RefreshCw size={14} className={`${fetchingModels ? 'animate-spin' : ''} group-hover:scale-110`} />
+                 </button>
+              </div>
+
+              <div className="h-4 w-[1px] bg-[#111111] hidden sm:block" />
+
+              <button 
+                onClick={() => setShowParamMenu(!showParamMenu)}
+                className={`flex items-center gap-2 px-6 py-2 rounded-full border transition-all text-[10px] font-black uppercase tracking-widest ${
+                  showParamMenu ? 'bg-[#0070f3] border-[#0070f3] text-white shadow-lg shadow-[#0070f3]/30' : 'bg-[#111111] border-[#222222] text-[#71717a] hover:text-white hover:border-[#0070f3]'
+                }`}
+              >
+                <Sliders size={14} />
+                <span>Strategy</span>
+              </button>
+            </div>
+
+            {/* Attachment Preview (Fixed Gap) */}
             <AnimatePresence>
               {attachments.length > 0 && (
                 <motion.div 
-                  initial={{ opacity: 0, y: 10 }}
-                  animate={{ opacity: 1, y: 0 }}
-                  exit={{ opacity: 0, y: 10 }}
-                  className="flex flex-wrap gap-2 p-3 bg-[var(--card-app)] border border-[var(--border-app)] rounded-none shadow-lg"
+                  initial={{ opacity: 0, height: 0 }}
+                  animate={{ opacity: 1, height: 'auto' }}
+                  exit={{ opacity: 0, height: 0 }}
+                  className="flex flex-wrap gap-4 p-4 bg-[#0a0a0a] border border-[#111111] rounded-2xl overflow-hidden"
                 >
                   {attachments.map((file, i) => (
-                    <div key={i} className="group relative flex items-center gap-2 p-2 bg-white dark:bg-slate-800 rounded-none border border-[var(--border-app)]">
+                    <div key={i} className="group relative flex items-center gap-3 p-3 bg-[#111111] rounded-xl border border-white/5">
                       {file.type.startsWith('image/') ? (
-                        <img src={`data:${file.type};base64,${file.data}`} className="w-8 h-8 object-cover rounded-none" />
+                        <img src={`data:${file.type};base64,${file.data}`} className="w-12 h-12 object-cover rounded-lg" />
                       ) : (
-                        <div className="w-8 h-8 flex items-center justify-center bg-slate-100 dark:bg-slate-900 rounded-none">
-                          <FileIcon size={16} />
+                        <div className="w-12 h-12 flex items-center justify-center bg-black/40 rounded-lg">
+                          <FileIcon size={20} className="text-[#3b82f6]" />
                         </div>
                       )}
-                      <div className="flex flex-col min-w-0 pr-6">
-                        <span className="text-[10px] font-bold truncate max-w-[100px]">{file.name}</span>
-                        <span className="text-[8px] opacity-50 uppercase">{file.type.split('/')[1]}</span>
+                      <div className="flex flex-col min-w-0 pr-10">
+                        <span className="text-[11px] font-black text-white/80 truncate max-w-[140px] uppercase tracking-wider">{file.name}</span>
+                        <span className="text-[9px] text-[#71717a] uppercase font-mono">{file.type.split('/')[1]}</span>
                       </div>
                       <button 
                         onClick={() => removeAttachment(i)}
-                        className="absolute right-1 top-1 p-1 bg-red-500 text-white rounded-none opacity-0 group-hover:opacity-100 transition-opacity"
+                        className="absolute right-2 top-2 p-1.5 bg-red-600 hover:bg-red-500 text-white rounded-full opacity-0 group-hover:opacity-100 transition-opacity"
                       >
-                        <X size={8} />
+                        <X size={10} />
                       </button>
                     </div>
                   ))}
@@ -758,43 +1016,32 @@ export default function App() {
               )}
             </AnimatePresence>
 
-            <div className="relative group">
+            <div className="relative">
               <AnimatePresence>
                 {showParamMenu && (
                   <motion.div
-                    initial={{ opacity: 0, y: 10, scale: 0.95 }}
+                    initial={{ opacity: 0, y: 10, scale: 0.98 }}
                     animate={{ opacity: 1, y: 0, scale: 1 }}
-                    exit={{ opacity: 0, y: 10, scale: 0.95 }}
-                    className="absolute bottom-full left-0 mb-2 w-64 bg-white dark:bg-slate-900 border border-[var(--border-app)] shadow-2xl p-4 z-50 rounded-none bg-opacity-90 backdrop-blur-md"
+                    exit={{ opacity: 0, y: 10, scale: 0.98 }}
+                    className="absolute bottom-full right-0 sm:left-0 mb-5 w-[calc(100vw-2rem)] sm:w-80 max-w-sm bg-[#0a0a0a] border border-[#111111] shadow-2xl p-6 sm:p-7 z-50 rounded-3xl backdrop-blur-2xl"
                   >
-                    <div className="flex justify-between items-center mb-3">
-                      <span className="text-[10px] font-black uppercase tracking-widest text-[var(--accent-app)]">Generation Tuning</span>
-                      <button onClick={() => setShowParamMenu(false)} className="text-[var(--text-secondary)] hover:text-[var(--text-app)]"><X size={14} /></button>
+                    <div className="flex justify-between items-center mb-6">
+                      <span className="text-[10px] font-black uppercase tracking-[0.4em] text-[#0070f3]">Synthesizer Settings</span>
                     </div>
-                    <div className="space-y-4">
+                    <div className="space-y-8">
                       <div>
-                        <label className="block text-xs font-semibold mb-1">Temperature</label>
+                         <div className="flex justify-between mb-3 text-[10px] font-black uppercase tracking-widest text-[#71717a]">
+                          <label>Logical Depth</label>
+                          <span className="text-[#0070f3] font-mono">{settings.maxOutputTokens || 2048}</span>
+                        </div>
                         <input 
-                          type="number"
-                          step="0.1"
-                          min="0"
-                          max="2"
-                          value={settings.temperature ?? ''}
-                          onChange={(e) => setSettings(s => ({ ...s, temperature: e.target.value ? Number(e.target.value) : undefined }))}
-                          placeholder="e.g. 0.7"
-                          className="w-full bg-slate-50 dark:bg-slate-800 border border-[var(--border-app)] rounded-none py-1.5 px-2 focus:outline-none focus:ring-1 focus:ring-[var(--accent-app)] transition-all font-mono text-xs"
-                        />
-                      </div>
-                      <div>
-                        <label className="block text-xs font-semibold mb-1">Max Output Tokens</label>
-                        <input 
-                          type="number"
-                          step="1"
+                          type="range"
                           min="1"
-                          value={settings.maxOutputTokens ?? ''}
-                          onChange={(e) => setSettings(s => ({ ...s, maxOutputTokens: e.target.value ? Number(e.target.value) : undefined }))}
-                          placeholder="e.g. 8192"
-                          className="w-full bg-slate-50 dark:bg-slate-800 border border-[var(--border-app)] rounded-none py-1.5 px-2 focus:outline-none focus:ring-1 focus:ring-[var(--accent-app)] transition-all font-mono text-xs"
+                          max="8192"
+                          step="128"
+                          value={settings.maxOutputTokens ?? 2048}
+                          onChange={(e) => setSettings(s => ({ ...s, maxOutputTokens: Number(e.target.value) }))}
+                          className="w-full h-1 bg-[#111111] rounded-lg appearance-none cursor-pointer accent-[#0070f3]"
                         />
                       </div>
                     </div>
@@ -802,49 +1049,56 @@ export default function App() {
                 )}
               </AnimatePresence>
 
-              <div className="absolute left-3 top-1/2 -translate-y-1/2 flex items-center gap-1">
-                <button 
-                  onClick={() => setShowParamMenu(!showParamMenu)}
-                  className={`p-2 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-none transition-all ${showParamMenu ? 'text-[var(--accent-app)] opacity-100' : 'text-[var(--text-app)] opacity-60 hover:opacity-100'}`}
-                >
-                  <Sliders size={18} />
-                </button>
+              <div className="flex items-end gap-2 sm:gap-3 bg-[#0a0a0a] border border-[#111111] focus-within:border-[#0070f3] rounded-[24px] sm:rounded-3xl p-2 pl-4 sm:p-5 sm:pl-7 transition-all shadow-2xl ring-1 ring-[#0070f3]/10">
+                <input
+                  type="file"
+                  multiple
+                  ref={fileInputRef}
+                  onChange={handleFileSelect}
+                  className="hidden"
+                />
                 <button 
                   onClick={() => fileInputRef.current?.click()}
-                  className="p-2 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-none text-[var(--text-app)] opacity-60 hover:opacity-100 transition-all"
+                  className="p-2 sm:p-3 mb-1 sm:mb-1 hover:bg-[#111111] rounded-xl sm:rounded-2xl transition-all text-[#71717a] hover:text-[#0070f3]"
+                  title="Upload Intelligence"
                 >
-                  <Paperclip size={18} />
+                  <Paperclip size={20} className="sm:w-6 sm:h-6" />
                 </button>
-                <input 
-                  ref={fileInputRef}
-                  type="file" 
-                  multiple 
-                  className="hidden" 
-                  onChange={handleFileSelect}
+                <textarea 
+                  value={input}
+                  onChange={(e) => {
+                    setInput(e.target.value);
+                    e.target.style.height = 'auto';
+                    e.target.style.height = Math.min(e.target.scrollHeight, 200) + 'px';
+                  }}
+                  onPaste={handlePaste}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter' && !e.shiftKey) {
+                      e.preventDefault();
+                      handleSendMessage();
+                      e.currentTarget.style.height = 'auto';
+                    }
+                  }}
+                  placeholder="Initiate secure sequence..."
+                  rows={1}
+                  className="flex-1 max-h-48 sm:max-h-64 bg-transparent border-none focus:ring-0 text-white placeholder-white/20 resize-none py-3 scroll-hide font-semibold text-base sm:text-lg tracking-tight leading-relaxed"
                 />
+                <button 
+                  onClick={handleSendMessage}
+                  disabled={(!input.trim() && attachments.length === 0) || isSessionLoading(activeSessionId)}
+                  className={`p-3 sm:p-4 mb-0.5 sm:mb-1 rounded-xl sm:rounded-2xl transition-all shadow-2xl ${
+                    input.trim() || attachments.length > 0 
+                      ? 'bg-[#0070f3] text-white hover:scale-105 active:scale-95 shadow-[#0070f3]/50' 
+                      : 'bg-[#111111] text-[#71717a] opacity-50'
+                  }`}
+                >
+                  <Send size={18} className="sm:w-6 sm:h-6" />
+                </button>
               </div>
-              <input 
-                value={input}
-                onChange={(e) => setInput(e.target.value)}
-                onKeyDown={(e) => e.key === 'Enter' && !e.shiftKey && handleSendMessage()}
-                placeholder="Compose a luxury prompt..."
-                className="w-full bg-white dark:bg-slate-900 border border-[var(--border-app)] rounded-none py-4 pl-24 pr-14 shadow-xl focus:outline-none focus:ring-1 focus:ring-[var(--accent-app)] focus:border-transparent transition-all placeholder:text-slate-400 group-hover:border-slate-300 dark:group-hover:border-slate-700 text-[var(--text-app)]"
-              />
-              <button 
-                onClick={handleSendMessage}
-                disabled={isSessionLoading(activeSessionId) || (!input.trim() && attachments.length === 0)}
-                className={`absolute right-3 top-1/2 -translate-y-1/2 w-10 h-10 rounded-none flex items-center justify-center transition-all ${
-                  input.trim() || attachments.length > 0
-                    ? 'bg-[var(--accent-app)] text-white shadow-lg active:scale-95' 
-                    : 'bg-slate-100 dark:bg-slate-800 text-slate-400'
-                }`}
-              >
-                <Send size={18} />
-              </button>
             </div>
           </div>
-          <div className="text-center mt-3 text-[10px] text-[var(--text-secondary)] uppercase tracking-[0.3em] font-black">
-            PRIVÉ AI ✨ SECURE & BEYOND
+          <div className="text-center mt-6 text-[9px] text-[#71717a] uppercase tracking-[0.7em] font-black opacity-40">
+            PRIVÉ AI <span className="text-[#3b82f6]">|</span> ARCHITECT OF SECURE INTELLIGENCE
           </div>
         </div>
       </div>

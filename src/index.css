@@ -5,11 +5,11 @@
 
 @layer base {
   :root {
-    --bg-app: #050505;
+    --bg-app: #000000;
     --text-app: #ffffff;
-    --accent-app: var(--color-blue-primary);
-    --border-app: #1a1a1a;
-    --card-app: #111111;
+    --accent-app: #0070f3; /* Premium blue */
+    --border-app: #111111;
+    --card-app: #0a0a0a;
     --text-secondary: #a1a1aa;
     color-scheme: dark;
   }
@@ -18,33 +18,52 @@
     background-color: var(--bg-app);
     color: var(--text-app);
     font-family: var(--font-sans);
+    margin: 0;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
   }
 }
 
 .markdown-body {
-  @apply text-sm leading-relaxed antialiased;
+  @apply text-[15px] leading-relaxed antialiased font-medium;
+}
+
+.markdown-body p {
+  @apply my-4;
 }
 
 .markdown-body table {
-  @apply w-full border-collapse border border-slate-800 my-6 overflow-hidden;
+  @apply w-full border-collapse border border-[#111111] my-8 rounded-xl overflow-hidden;
   display: block;
   overflow-x: auto;
 }
 
 .markdown-body th {
-  @apply bg-slate-900 border border-slate-800 p-3 text-left font-bold text-xs uppercase tracking-wider;
+  @apply bg-[#0a0a0a] border border-[#111111] p-4 text-left font-black text-[10px] uppercase tracking-[0.2em] text-[#3b82f6];
 }
 
 .markdown-body td {
-  @apply border border-slate-800 p-3 text-sm;
+  @apply border border-[#111111] p-4 text-sm text-[#d1d1d6];
 }
 
 .markdown-body code {
-  @apply font-mono bg-slate-800 px-1;
+  @apply font-mono bg-[#111111] text-[#3b82f6] px-1.5 py-0.5 rounded-md text-xs;
 }
 
 .markdown-body pre {
-  @apply bg-slate-900 text-white p-4 overflow-x-auto my-4;
+  @apply bg-[#0a0a0a] border border-[#111111] text-white p-6 overflow-x-auto my-6 rounded-2xl shadow-2xl;
+}
+
+.markdown-body pre code {
+  @apply bg-transparent text-inherit p-0 rounded-none text-sm leading-relaxed;
+}
+
+.markdown-body ul, .markdown-body ol {
+  @apply my-4 ml-6 list-disc;
+}
+
+.markdown-body blockquote {
+  @apply border-l-4 border-[#3b82f6] pl-6 my-6 italic text-[#a1a1aa] bg-[#0a0a0a] py-4 pr-4 rounded-r-xl;
 }
 
 .scroll-hide::-webkit-scrollbar {

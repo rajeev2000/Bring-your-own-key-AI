@@ -1,7 +1,9 @@
 export interface Attachment {
   name: string;
   type: string;
-  data: string; // base64
+  data?: string; // base64 for binaries
+  isText?: boolean;
+  content?: string; // raw text for text files
 }
 
 export interface Message {

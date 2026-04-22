@@ -14,7 +14,7 @@
     "android": "expo run:android",
     "ios": "expo run:ios",
     "web": "expo start --web",
-    "start": "expo start"
+    "expo:start": "expo start"
   },
   "dependencies": {
     "@capacitor/android": "^8.3.1",
