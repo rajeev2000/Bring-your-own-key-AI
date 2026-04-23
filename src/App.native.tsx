@@ -52,6 +52,10 @@ const StyledTextInput = styled(TextInput);
 const StyledTouchableOpacity = styled(TouchableOpacity);
 const StyledSafeAreaView = styled(SafeAreaView);
 
+const generateId = () => {
+  return Math.random().toString(36).substring(2) + Date.now().toString(36);
+};
+
 export default function App() {
   const [sessions, setSessions] = useState<ChatSession[]>([]);
   const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
@@ -66,17 +70,31 @@ export default function App() {
   const [showStrategy, setShowStrategy] = useState(false);
   
   const [settings, setSettings] = useState<AppSettings>({
-    apiKey: '',
-    baseUrl: DEFAULT_BASE_URL,
+    providers: [
+      {
+        id: generateId(),
+        name: 'Google AI',
+        apiKey: '',
+        baseUrl: DEFAULT_BASE_URL,
+        enabled: true
+      }
+    ],
+    activeProviderId: undefined,
     model: DEFAULT_MODEL,
     maxOutputTokens: 2048
   });
 
-  const scrollRef = useRef<ScrollView>(null);
-
-  const generateId = () => {
-    return Math.random().toString(36).substring(2) + Date.now().toString(36);
+  const getActiveProvider = () => {
+    if (settings.activeProviderId) {
+      return settings.providers.find(p => p.id === settings.activeProviderId);
+    }
+    if (settings.model.includes('gpt')) {
+      return settings.providers.find(p => p.name.toLowerCase().includes('openai'));
+    }
+    return settings.providers.find(p => p.name.toLowerCase().includes('google')) || settings.providers[0];
   };
+
+  const scrollRef = useRef<ScrollView>(null);
 
   useEffect(() => {
     loadData();
@@ -94,7 +112,24 @@ export default function App() {
       }
       
       if (savedSettings) {
-        setSettings(JSON.parse(savedSettings));
+        const parsed = JSON.parse(savedSettings);
+        // Migration
+        if (!parsed.providers) {
+          const legacyProvider = {
+            id: generateId(),
+            name: 'Google AI',
+            apiKey: parsed.apiKey || '',
+            baseUrl: parsed.baseUrl || DEFAULT_BASE_URL,
+            enabled: true
+          };
+          setSettings({
+            ...parsed,
+            providers: [legacyProvider],
+            activeProviderId: legacyProvider.id
+          });
+        } else {
+          setSettings(parsed);
+        }
       }
     } catch (e) {
       console.error('Failed to load data', e);
@@ -110,19 +145,33 @@ export default function App() {
   }, [settings]);
 
   const fetchModels = async () => {
-    if (!settings.apiKey) {
-      setError("Provide an API key before syncing models.");
+    const provider = getActiveProvider();
+    if (!provider || !provider.apiKey) {
+      setError("Provide an API key for the active provider before syncing.");
       return;
     }
     setFetchingModels(true);
     try {
-      const ai = new GoogleGenAI({ apiKey: settings.apiKey });
-      const modelsResult = await ai.models.list();
-      const modelsArray: string[] = [];
-      for await (const m of modelsResult) {
-        modelsArray.push((m.name || '').replace('models/', ''));
+      if (provider.baseUrl.includes('generative')) {
+        const ai = new GoogleGenAI({ apiKey: provider.apiKey });
+        const modelsResult = await ai.models.list();
+        const modelsArray: string[] = [];
+        for await (const m of modelsResult) {
+          modelsArray.push((m.name || '').replace('models/', ''));
+        }
+        setAvailableModels(modelsArray);
+      } else {
+        // Direct fetch for OpenAI-like on mobile (CORS is less of an issue)
+        let base = provider.baseUrl.trim().replace(/\/+$/, '');
+        const url = base.endsWith('/v1') ? `${base}/models` : `${base}/v1/models`;
+        const res = await fetch(url, {
+          headers: { Authorization: `Bearer ${provider.apiKey}` }
+        });
+        const data = await res.json();
+        if (data.data) {
+          setAvailableModels(data.data.map((m: any) => m.id));
+        }
       }
-      setAvailableModels(modelsArray);
     } catch (e: any) {
       setError(`Model sync failed: ${e.message}`);
     } finally {
@@ -186,8 +235,10 @@ export default function App() {
 
   const handleSendMessage = async () => {
     if (!input.trim() && attachments.length === 0) return;
-    if (!settings.apiKey) {
-      setError('Provide an API key in preferences.');
+    
+    const provider = getActiveProvider();
+    if (!provider || !provider.apiKey) {
+      setError('Provide an API key for the active provider in preferences.');
       setShowSettings(true);
       return;
     }
@@ -229,84 +280,170 @@ export default function App() {
     setLoadingSessions(prev => new Set(prev).add(sessionId));
 
     try {
-      const isImageRequest = currentInput.toLowerCase().startsWith('/imagine ') || currentInput.toLowerCase().startsWith('/image ');
-      const ai = new GoogleGenAI({ apiKey: settings.apiKey });
+      const isGemini = provider.baseUrl.includes('generative');
       const currentSession = updatedSessions.find(s => s.id === sessionId)!;
+      const model = settings.model || DEFAULT_MODEL;
       
-      if (isImageRequest) {
-        const prompt = currentInput.replace(/^\/(imagine|image)\s+/i, '');
-        const response = await ai.models.generateImages({
-          model: 'imagen-3.0-generate-002',
-          prompt,
-          config: { numberOfImages: 1, outputMimeType: 'image/jpeg' }
+      if (isGemini) {
+        const ai = new GoogleGenAI({ 
+          apiKey: provider.apiKey,
+          ...(provider.baseUrl !== DEFAULT_BASE_URL ? { httpOptions: { baseUrl: provider.baseUrl } } : {})
         });
-        
-        const base64 = response.generatedImages?.[0]?.image?.imageBytes;
-        
-        const aiMessage: Message = {
-          id: generateId(),
-          role: 'assistant',
-          content: '',
-          timestamp: Date.now(),
-          attachments: base64 ? [{
-            name: `generated_${Date.now()}.jpg`,
-            type: 'image/jpeg',
-            data: base64,
-            isText: false
-          }] : undefined
-        };
-        setSessions(prev => prev.map(s => s.id === sessionId ? { ...s, messages: [...s.messages, aiMessage], updatedAt: Date.now() } : s));
-      } else {
-        const contents = currentSession.messages.map(m => {
-          const parts: any[] = [{ text: m.content || '' }];
-          if (m.attachments) {
-            m.attachments.forEach(att => {
-              if (att.isText) {
-                parts.push({ text: `\n[FILE: ${att.name}]\n${att.content}\n[END FILE]` });
-              } else {
-                parts.push({
-                  inlineData: {
-                    data: att.data,
-                    mimeType: att.type
-                  }
-                });
-              }
-            });
-          }
-          return {
-            role: m.role === 'assistant' ? 'model' : m.role,
-            parts
+        const isImageRequest = currentInput.toLowerCase().startsWith('/imagine ') || currentInput.toLowerCase().startsWith('/image ');
+
+        if (isImageRequest) {
+          const prompt = currentInput.replace(/^\/(imagine|image)\s+/i, '');
+          const response = await ai.models.generateImages({
+            model: 'imagen-3.0-generate-002',
+            prompt,
+            config: { numberOfImages: 1, outputMimeType: 'image/jpeg' }
+          });
+          
+          const base64 = response.generatedImages?.[0]?.image?.imageBytes;
+          
+          const aiMessage: Message = {
+            id: generateId(),
+            role: 'assistant',
+            content: '',
+            timestamp: Date.now(),
+            attachments: base64 ? [{
+              name: `generated_${Date.now()}.jpg`,
+              type: 'image/jpeg',
+              data: base64,
+              isText: false
+            }] : undefined
           };
+          setSessions(prev => prev.map(s => s.id === sessionId ? { ...s, messages: [...s.messages, aiMessage], updatedAt: Date.now() } : s));
+        } else {
+          const contents = currentSession.messages.map(m => {
+            const parts: any[] = [{ text: m.content || '' }];
+            if (m.attachments) {
+              m.attachments.forEach(att => {
+                if (att.isText) {
+                  parts.push({ text: `\n[FILE: ${att.name}]\n${att.content}\n[END FILE]` });
+                } else {
+                  parts.push({
+                    inlineData: {
+                      data: att.data,
+                      mimeType: att.type
+                    }
+                  });
+                }
+              });
+            }
+            return {
+              role: m.role === 'assistant' ? 'model' : m.role,
+              parts
+            };
+          });
+
+          const response = await ai.models.generateContent({
+            model: model,
+            contents
+          });
+          
+          const parts = response.candidates?.[0]?.content?.parts || [];
+          const text = parts.map(p => p.text || '').join('');
+          const usageCount = response.usageMetadata?.candidatesTokenCount || 0;
+          
+          const generatedAttachments: any[] = [];
+          parts.forEach(p => {
+             if (p.inlineData?.data) {
+                generatedAttachments.push({
+                   name: `generated_${Date.now()}.png`,
+                   type: p.inlineData.mimeType || 'image/png',
+                   data: p.inlineData.data,
+                   isText: false
+                });
+             }
+          });
+
+          const aiMessage: Message = {
+            id: generateId(),
+            role: 'assistant',
+            content: text,
+            timestamp: Date.now(),
+            tokenCount: usageCount || undefined,
+            modelUsed: model,
+            attachments: generatedAttachments.length > 0 ? generatedAttachments : undefined
+          };
+          setSessions(prev => prev.map(s => s.id === sessionId ? { ...s, messages: [...s.messages, aiMessage], updatedAt: Date.now() } : s));
+        }
+      } else {
+        // OpenAI-compatible direct fetch
+        const isLegacyModel = model.toLowerCase().includes('instruct') || 
+                            model.toLowerCase().includes('davinci') || 
+                            model.toLowerCase().includes('curie') || 
+                            model.toLowerCase().includes('babbage') || 
+                            model.toLowerCase().includes('ada');
+        
+        const isO1Model = model.toLowerCase().startsWith('o1') || 
+                          model.toLowerCase().startsWith('o3') || 
+                          model.toLowerCase().includes('reasoning') ||
+                          model.toLowerCase().includes('latest');
+
+        const messages = currentSession.messages.map(m => ({ role: m.role, content: m.content }));
+
+        let base = provider.baseUrl.trim().replace(/\/+$/, '');
+        const endpoint = isLegacyModel ? 'completions' : 'chat/completions';
+        const url = base.endsWith('/v1') ? `${base}/${endpoint}` : `${base}/v1/${endpoint}`;
+
+        const tokenLimit = isLegacyModel ? 4096 : (model.includes('gpt-4') ? 8192 : 4096);
+        let maxTokens = settings.maxOutputTokens || 2048;
+        if (maxTokens > tokenLimit) maxTokens = tokenLimit;
+
+        const requestBody: any = {
+          model,
+          temperature: isO1Model ? 1 : 0.7
+        };
+
+        if (isLegacyModel) {
+          requestBody.prompt = messages.map(m => `${m.role.charAt(0).toUpperCase() + m.role.slice(1)}: ${m.content}`).join('\n') + '\nAssistant: ';
+          requestBody.max_tokens = maxTokens;
+        } else {
+          requestBody.messages = messages;
+          if (isO1Model) {
+            requestBody.max_completion_tokens = maxTokens;
+          } else {
+            requestBody.max_tokens = maxTokens;
+          }
+        }
+
+        const res = await fetch(url, {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${provider.apiKey}`,
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify(requestBody)
         });
 
-        const result = await ai.models.generateContent({
-          model: settings.model || DEFAULT_MODEL,
-          contents
-        });
-        
-        const parts = result.candidates?.[0]?.content?.parts || [];
-        const text = parts.map(p => p.text || '').join('');
-        
-        const generatedAttachments: any[] = [];
-        parts.forEach(p => {
-           if (p.inlineData?.data) {
-              generatedAttachments.push({
-                 name: `generated_${Date.now()}.png`,
-                 type: p.inlineData.mimeType || 'image/png',
-                 data: p.inlineData.data,
-                 isText: false
-              });
-           }
-        });
+        if (!res.ok) {
+          const errData = await res.json();
+          throw new Error(errData.error?.message || errData.message || 'Failed to fetch from OpenAI');
+        }
+
+        const data = await res.json();
+        let fullText = '';
+        let usageCount = 0;
+
+        if (isLegacyModel) {
+          fullText = data.choices?.[0]?.text || '';
+          usageCount = data.usage?.completion_tokens || 0;
+        } else {
+          fullText = data.choices?.[0]?.message?.content || '';
+          usageCount = data.usage?.completion_tokens || data.usage?.total_tokens || 0;
+        }
 
         const aiMessage: Message = {
           id: generateId(),
           role: 'assistant',
-          content: text || (generatedAttachments.length ? '' : 'No response from AI.'),
+          content: fullText,
           timestamp: Date.now(),
-          attachments: generatedAttachments.length > 0 ? generatedAttachments : undefined
+          tokenCount: usageCount || undefined,
+          modelUsed: model
         };
-
+        
         setSessions(prev => prev.map(s => s.id === sessionId ? { ...s, messages: [...s.messages, aiMessage], updatedAt: Date.now() } : s));
       }
     } catch (err: any) {
@@ -398,9 +535,12 @@ export default function App() {
                   <StyledText className="text-[#a1a1aa] text-[10px] uppercase font-bold tracking-widest">
                     {new Date(m.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
                   </StyledText>
-                  {m.role === 'assistant' && (
-                    <StyledView className="bg-black/50 px-2 py-0.5 rounded-full border border-[#3b82f6]/20">
-                       <StyledText className="text-[#3b82f6] text-[8px] font-black uppercase tracking-widest">Validated</StyledText>
+                  {m.role === 'assistant' && (m.tokenCount || m.modelUsed) && (
+                    <StyledView className="bg-black/50 px-3 py-1 rounded-full border border-[#3b82f6]/20 flex-row items-center">
+                       <Sparkles size={8} color="#3b82f6" />
+                       <StyledText className="text-[#3b82f6] text-[7px] font-black uppercase tracking-widest ml-1">
+                         {m.modelUsed ? `${m.modelUsed} | ` : ''}{m.tokenCount ? `${m.tokenCount} Tokens` : 'Elite Response'}
+                       </StyledText>
                     </StyledView>
                   )}
                 </StyledView>
@@ -569,25 +709,100 @@ export default function App() {
             </StyledTouchableOpacity>
           </StyledView>
 
-          <StyledScrollView className="flex-1">
-            <StyledView className="mb-6">
-              <StyledText className="text-[#3b82f6] font-bold uppercase text-xs mb-2 tracking-widest">API Key</StyledText>
-              <StyledTextInput 
-                className="bg-[#0a0a0a] border border-[#111111] p-4 rounded-lg text-white font-mono"
-                placeholder="Enter Gemini API Key"
-                placeholderTextColor="#444"
-                secureTextEntry
-                value={settings.apiKey}
-                onChangeText={(text) => setSettings(s => ({ ...s, apiKey: text }))}
-              />
+          <StyledScrollView className="flex-1" showsVerticalScrollIndicator={false}>
+            <StyledView className="mb-6 space-y-4">
+              <StyledText className="text-[#3b82f6] font-bold uppercase text-[10px] tracking-[0.4em] mb-4">Active Intelligence</StyledText>
+              <StyledView className="bg-[#0a0a0a] border border-[#111111] rounded-xl overflow-hidden mb-8">
+                {settings.providers.map((p, idx) => (
+                  <StyledTouchableOpacity 
+                    key={p.id}
+                    onPress={() => setSettings(s => ({ ...s, activeProviderId: p.id }))}
+                    className={`p-4 border-b border-[#111111] flex-row items-center justify-between ${settings.activeProviderId === p.id || (idx === 0 && !settings.activeProviderId) ? 'bg-[#3b82f6]/10' : ''}`}
+                  >
+                    <StyledText className={`text-sm font-bold tracking-widest uppercase ${settings.activeProviderId === p.id || (idx === 0 && !settings.activeProviderId) ? 'text-[#3b82f6]' : 'text-white'}`}>
+                      {p.name}
+                    </StyledText>
+                  </StyledTouchableOpacity>
+                ))}
+              </StyledView>
+
+              <StyledView className="flex-row items-center justify-between mb-4">
+                <StyledText className="text-[#71717a] font-bold uppercase text-[10px] tracking-[0.4em]">Manage Providers</StyledText>
+                <StyledTouchableOpacity 
+                  onPress={() => {
+                    const newProv = { id: generateId(), name: 'New Provider', apiKey: '', baseUrl: 'https://api.openai.com', enabled: true };
+                    setSettings(s => ({ ...s, providers: [...s.providers, newProv] }));
+                  }}
+                >
+                   <PlusCircle size={16} color="#3b82f6" />
+                </StyledTouchableOpacity>
+              </StyledView>
+
+              {settings.providers.map((provider, providerIdx) => (
+                <StyledView key={provider.id} className="bg-[#0a0a0a] border border-[#111111] rounded-2xl p-5 mb-6 space-y-4">
+                  <StyledView className="flex-row items-center justify-between mb-2">
+                    <StyledTextInput 
+                      className="text-white font-black uppercase text-xs tracking-widest flex-1"
+                      value={provider.name}
+                      onChangeText={(val) => {
+                        const newP = [...settings.providers];
+                        newP[providerIdx].name = val;
+                        setSettings(s => ({ ...s, providers: newP }));
+                      }}
+                    />
+                    {settings.providers.length > 1 && (
+                      <StyledTouchableOpacity 
+                        onPress={() => {
+                          const newP = settings.providers.filter((_, i) => i !== providerIdx);
+                          setSettings(s => ({ ...s, providers: newP, activeProviderId: s.activeProviderId === provider.id ? newP[0].id : s.activeProviderId }));
+                        }}
+                      >
+                         <Trash2 size={16} color="#ef4444" />
+                      </StyledTouchableOpacity>
+                    )}
+                  </StyledView>
+
+                  <StyledView>
+                    <StyledText className="text-[#71717a] font-bold uppercase text-[8px] tracking-widest mb-2">Authentication Key</StyledText>
+                    <StyledTextInput 
+                      className="bg-black/50 border border-[#222] p-3 rounded-lg text-white font-mono text-xs"
+                      placeholder="API Key"
+                      placeholderTextColor="#444"
+                      secureTextEntry
+                      value={provider.apiKey}
+                      onChangeText={(text) => {
+                        const newP = [...settings.providers];
+                        newP[providerIdx].apiKey = text;
+                        setSettings(s => ({ ...s, providers: newP }));
+                      }}
+                    />
+                  </StyledView>
+
+                  <StyledView>
+                    <StyledText className="text-[#71717a] font-bold uppercase text-[8px] tracking-widest mb-2">Base Endpoint URL</StyledText>
+                    <StyledTextInput 
+                      className="bg-black/50 border border-[#222] p-3 rounded-lg text-white font-mono text-[10px]"
+                      placeholder="https://..."
+                      placeholderTextColor="#444"
+                      value={provider.baseUrl}
+                      onChangeText={(text) => {
+                        const newP = [...settings.providers];
+                        newP[providerIdx].baseUrl = text;
+                        setSettings(s => ({ ...s, providers: newP }));
+                      }}
+                    />
+                  </StyledView>
+                </StyledView>
+              ))}
             </StyledView>
             
             <StyledTouchableOpacity 
               onPress={() => setShowSettings(false)}
-              className="bg-[#3b82f6] py-5 rounded-lg mt-10"
+              className="bg-[#3b82f6] py-5 rounded-lg mt-6 shadow-2xl shadow-[#3b82f6]/20"
             >
-              <StyledText className="text-white text-center font-bold tracking-widest uppercase">Apply Changes</StyledText>
+              <StyledText className="text-white text-center font-bold tracking-widest uppercase">Seal Preferences</StyledText>
             </StyledTouchableOpacity>
+            <StyledView className="h-20" />
           </StyledScrollView>
         </StyledView>
       </Modal>

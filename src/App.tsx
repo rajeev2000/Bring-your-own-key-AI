@@ -41,6 +41,14 @@ import * as XLSX from 'xlsx';
 
 import { Message, ChatSession, AppSettings, DEFAULT_MODEL, DEFAULT_BASE_URL } from './types';
 
+const generateId = () => {
+  try {
+    return crypto.randomUUID();
+  } catch {
+    return Math.random().toString(36).substring(2) + Date.now().toString(36);
+  }
+};
+
 export default function App() {
   // --- State ---
   const [sessions, setSessions] = useState<ChatSession[]>([]);
@@ -60,23 +68,71 @@ export default function App() {
   
   const [settings, setSettings] = useState<AppSettings>(() => {
     const saved = localStorage.getItem('droidai_settings');
-    return saved ? JSON.parse(saved) : {
-      apiKey: '',
-      baseUrl: DEFAULT_BASE_URL,
+    if (saved) {
+      const parsed = JSON.parse(saved);
+      // Migration for old settings
+      if (!parsed.providers) {
+        return {
+          providers: [
+            {
+              id: generateId(),
+              name: 'Google AI',
+              apiKey: parsed.apiKey || '',
+              baseUrl: parsed.baseUrl || DEFAULT_BASE_URL,
+              enabled: true
+            },
+            {
+              id: generateId(),
+              name: 'OpenAI',
+              apiKey: '',
+              baseUrl: 'https://api.openai.com',
+              enabled: true
+            }
+          ],
+          activeProviderId: undefined,
+          model: parsed.model || DEFAULT_MODEL,
+          theme: 'system',
+          maxOutputTokens: parsed.maxOutputTokens || 2048
+        };
+      }
+      return parsed;
+    }
+    return {
+      providers: [
+        {
+          id: generateId(),
+          name: 'Google AI',
+          apiKey: '',
+          baseUrl: DEFAULT_BASE_URL,
+          enabled: true
+        },
+        {
+          id: generateId(),
+          name: 'OpenAI',
+          apiKey: '',
+          baseUrl: 'https://api.openai.com',
+          enabled: true
+        }
+      ],
+      activeProviderId: undefined,
       model: DEFAULT_MODEL,
-      theme: 'system'
+      theme: 'system',
+      maxOutputTokens: 2048
     };
   });
 
-  const scrollRef = useRef<HTMLDivElement>(null);
-
-  const generateId = () => {
-    try {
-      return crypto.randomUUID();
-    } catch {
-      return Math.random().toString(36).substring(2) + Date.now().toString(36);
+  const getActiveProvider = () => {
+    if (settings.activeProviderId) {
+      return settings.providers.find(p => p.id === settings.activeProviderId);
     }
+    // Fallback search by model name or just first one
+    if (settings.model.includes('gpt')) {
+      return settings.providers.find(p => p.name.toLowerCase().includes('openai'));
+    }
+    return settings.providers.find(p => p.name.toLowerCase().includes('google')) || settings.providers[0];
   };
+
+  const scrollRef = useRef<HTMLDivElement>(null);
 
   // --- Effects ---
   useEffect(() => {
@@ -122,13 +178,14 @@ export default function App() {
   }, [sessions, activeSessionId, loadingSessions]);
 
   const fetchModels = async (silent = false) => {
-    if (!settings.apiKey) {
-      if (!silent) setError("Provide an API key before syncing models.");
+    const provider = getActiveProvider();
+    if (!provider || !provider.apiKey) {
+      if (!silent) setError("Provide an API key for the active provider before syncing.");
       return;
     }
     setFetchingModels(true);
     try {
-      let base = settings.baseUrl.trim().replace(/\/+$/, '');
+      let base = provider.baseUrl.trim().replace(/\/+$/, '');
       if (!base.startsWith('http')) {
         base = 'https://' + base;
       }
@@ -137,8 +194,8 @@ export default function App() {
       
       if (isGemini) {
         const ai = new GoogleGenAI({ 
-          apiKey: settings.apiKey,
-          httpOptions: settings.baseUrl !== DEFAULT_BASE_URL ? { baseUrl: settings.baseUrl } : undefined
+          apiKey: provider.apiKey,
+          httpOptions: provider.baseUrl !== DEFAULT_BASE_URL ? { baseUrl: provider.baseUrl } : undefined
         });
         const modelsResult = await ai.models.list();
         const modelsArray: string[] = [];
@@ -148,8 +205,16 @@ export default function App() {
         setAvailableModels(modelsArray);
       } else {
         const url = base.endsWith('/v1') ? `${base}/models` : `${base}/v1/models`;
-        const res = await fetch(url, {
-          headers: { Authorization: `Bearer ${settings.apiKey}` }
+        
+        // Use local proxy to avoid CORS
+        const res = await fetch('/api/proxy', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            url: url,
+            method: 'GET',
+            headers: { 'Authorization': `Bearer ${provider.apiKey}` }
+          })
         });
         
         if (!res.ok) {
@@ -157,7 +222,9 @@ export default function App() {
           try {
             const errData = await res.json();
             errorBody = errData.error?.message || errData.message || JSON.stringify(errData);
-          } catch (_) {}
+          } catch (_) {
+            errorBody = await res.text();
+          }
           throw new Error(errorBody ? `${res.status}: ${errorBody}` : `Endpoint returned ${res.status}: ${res.statusText}`);
         }
         
@@ -174,13 +241,7 @@ export default function App() {
       console.error("Failed to fetch models", e);
       setAvailableModels([]);
       if (!silent) {
-        if (e.message?.includes('400') || e.message?.includes('INVALID_ARGUMENT')) {
-          setError("Invalid API key or bad API endpoint argument.");
-        } else {
-          setError(e.message === 'Failed to fetch' 
-            ? "Network/CORS error. Endpoint might be offline or blocked. You can still type the model name manually." 
-            : `Model sync failed: ${e.message}`);
-        }
+        setError(`Model sync failed: ${e.message}`);
         setTimeout(() => setError(null), 5000);
       }
     } finally {
@@ -189,7 +250,8 @@ export default function App() {
   };
 
   useEffect(() => {
-     if (settings.apiKey) {
+     const provider = getActiveProvider();
+     if (provider?.apiKey) {
        fetchModels(true);
      }
   }, []);
@@ -322,9 +384,11 @@ export default function App() {
   const handleSendMessage = async () => {
     if (!input.trim() && attachments.length === 0) return;
     if (isSessionLoading(activeSessionId)) return;
+    
+    const provider = getActiveProvider();
 
-    if (!settings.apiKey) {
-      setError('Please provide an API key in settings.');
+    if (!provider || !provider.apiKey) {
+      setError('Please provide an API key for the active provider in settings.');
       setShowSettings(true);
       return;
     }
@@ -375,116 +439,80 @@ export default function App() {
         setSessions(updatedSessions);
       }
 
-      const ai = new GoogleGenAI({ 
-        apiKey: settings.apiKey,
-        httpOptions: settings.baseUrl !== DEFAULT_BASE_URL ? { baseUrl: settings.baseUrl } : undefined
-      });
       const currentSession = updatedSessions.find(s => s.id === sessionId)!;
-      
-      const history = currentSession.messages.map(m => {
-        const parts: any[] = [{ text: m.content || '' }];
-        if (m.attachments) {
-          m.attachments.forEach(att => {
-            if (att.isText) {
-              parts.push({ text: `\n[FILE: ${att.name}]\n${att.content}\n[END FILE]` });
-            } else {
-              parts.push({
-                inlineData: {
-                  data: att.data,
-                  mimeType: att.type
-                }
-              });
-            }
-          });
-        }
-        return {
-          role: m.role === 'assistant' ? 'model' : m.role,
-          parts
-        };
-      });
-
-      const isImageRequest = currentInput.toLowerCase().startsWith('/imagine ') || currentInput.toLowerCase().startsWith('/image ');
       const model = settings.model || DEFAULT_MODEL;
+      const isGemini = provider.baseUrl.includes('generative');
 
-      if (isImageRequest) {
-        const prompt = currentInput.replace(/^\/(imagine|image)\s+/i, '');
-        const startTime = Date.now();
-        const response = await ai.models.generateImages({
-          model: 'imagen-3.0-generate-002',
-          prompt,
-          config: { numberOfImages: 1, outputMimeType: 'image/jpeg' }
+      let sysInstruction = "You are Privé AI, an ultra-premium, luxury AI assistant. You speak with confidence and precision. MANDATORY: All data tables must be formatted as Github Flavored Markdown (GFM) tables. Always add a luxury spin to your responses.";
+      if (settings.maxOutputTokens !== undefined && settings.maxOutputTokens > 0) {
+        sysInstruction += ` IMPORTANT: You must strictly adjust and compress your entire answer to fit fully within ${settings.maxOutputTokens} tokens. Do perfectly finish your thoughts and NEVER cut off your response mid-sentence. Be concise if necessary.`;
+      }
+
+      const startTime = Date.now();
+      let fullText = '';
+      let finalTokens = 0;
+      let generatedAttachments: any[] = [];
+      const assistantMessageId = generateId();
+
+      const assistantMessage: Message = {
+        id: assistantMessageId,
+        role: 'assistant',
+        content: '',
+        timestamp: Date.now(),
+        isStreaming: true
+      };
+
+      setSessions(prev => prev.map(s => {
+        if (s.id === sessionId) {
+          return {
+            ...s,
+            messages: [...s.messages, assistantMessage],
+            updatedAt: Date.now()
+          };
+        }
+        return s;
+      }));
+
+      if (isGemini) {
+        const ai = new GoogleGenAI({ 
+          apiKey: provider.apiKey,
+          httpOptions: provider.baseUrl !== DEFAULT_BASE_URL ? { baseUrl: provider.baseUrl } : undefined
         });
         
-        const base64 = response.generatedImages?.[0]?.image?.imageBytes;
-        const responseTime = (Date.now() - startTime) / 1000;
-        
-        const assistantMessage: Message = {
-          id: generateId(),
-          role: 'assistant',
-          content: '',
-          timestamp: Date.now(),
-          responseTime,
-          attachments: base64 ? [{
-            name: `generated_${Date.now()}.jpg`,
-            type: 'image/jpeg',
-            data: base64,
-            isText: false
-          }] : undefined
-        };
-        
-        setSessions(prev => prev.map(s => {
-          if (s.id === sessionId) {
-            return {
-              ...s,
-              messages: [...s.messages, assistantMessage],
-              updatedAt: Date.now()
-            };
+        const history = currentSession.messages.map(m => {
+          const parts: any[] = [{ text: m.content || '' }];
+          if (m.attachments) {
+            m.attachments.forEach(att => {
+              if (att.isText) {
+                parts.push({ text: `\n[FILE: ${att.name}]\n${att.content}\n[END FILE]` });
+              } else {
+                parts.push({
+                  inlineData: {
+                    data: att.data,
+                    mimeType: att.type
+                  }
+                });
+              }
+            });
           }
-          return s;
-        }));
-      } else {
-        let sysInstruction = "You are Privé AI, an ultra-premium, luxury AI assistant. You speak with confidence and precision. MANDATORY: All data tables must be formatted as Github Flavored Markdown (GFM) tables. Always add a luxury spin to your responses.";
-        if (settings.maxOutputTokens !== undefined && settings.maxOutputTokens > 0) {
-          sysInstruction += ` IMPORTANT: You must strictly adjust and compress your entire answer to fit fully within ${settings.maxOutputTokens} tokens. Do perfectly finish your thoughts and NEVER cut off your response mid-sentence. Be concise if necessary.`;
-        }
-        
+          return {
+            role: m.role === 'assistant' ? 'model' : m.role,
+            parts
+          };
+        });
+
         const configOpts: any = {
           systemInstruction: sysInstruction
         };
         if (settings.temperature !== undefined) configOpts.temperature = Number(settings.temperature);
         if (settings.maxOutputTokens !== undefined) configOpts.maxOutputTokens = Number(settings.maxOutputTokens);
 
-        const startTime = Date.now();
         const responseStream = await ai.models.generateContentStream({
           model: model,
           contents: history,
           config: configOpts
         });
 
-        const assistantMessageId = generateId();
-        const assistantMessage: Message = {
-          id: assistantMessageId,
-          role: 'assistant',
-          content: '',
-          timestamp: Date.now(),
-          isStreaming: true
-        };
-
-        setSessions(prev => prev.map(s => {
-          if (s.id === sessionId) {
-            return {
-              ...s,
-              messages: [...s.messages, assistantMessage],
-              updatedAt: Date.now()
-            };
-          }
-          return s;
-        }));
-
-        let fullText = '';
-        let finalTokens = 0;
-        let generatedAttachments: any[] = [];
-        
         for await (const chunk of responseStream) {
           fullText += (chunk.text || '');
           if (chunk.usageMetadata) finalTokens = chunk.usageMetadata.candidatesTokenCount || 0;
@@ -509,6 +537,7 @@ export default function App() {
                 messages: s.messages.map(m => m.id === assistantMessageId ? { 
                   ...m, 
                   content: fullText,
+                  modelUsed: model,
                   attachments: generatedAttachments.length > 0 ? generatedAttachments : undefined
                 } : m),
                 updatedAt: Date.now()
@@ -517,20 +546,123 @@ export default function App() {
             return s;
           }));
         }
+      } else {
+        // OpenAI-compatible via Proxy
+        const isLegacyModel = model.toLowerCase().includes('instruct') || 
+                            model.toLowerCase().includes('davinci') || 
+                            model.toLowerCase().includes('curie') || 
+                            model.toLowerCase().includes('babbage') || 
+                            model.toLowerCase().includes('ada');
         
-        const responseTime = (Date.now() - startTime) / 1000;
+        const isO1Model = model.toLowerCase().startsWith('o1') || 
+                          model.toLowerCase().startsWith('o3') || 
+                          model.toLowerCase().includes('reasoning') ||
+                          model.toLowerCase().includes('latest');
+
+        const messages = [
+          { role: 'system', content: sysInstruction },
+          ...currentSession.messages.map(m => {
+            let content = m.content;
+            if (m.attachments) {
+              m.attachments.forEach(att => {
+                if (att.isText) {
+                  content += `\n[FILE: ${att.name}]\n${att.content}\n[END FILE]`;
+                } else if (att.data) {
+                  content += `\n[IMAGE ATTACHED: ${att.name}]`;
+                }
+              });
+            }
+            return { role: m.role, content };
+          })
+        ];
+
+        let base = provider.baseUrl.trim().replace(/\/+$/, '');
+        const endpoint = isLegacyModel ? 'completions' : 'chat/completions';
+        const url = base.endsWith('/v1') ? `${base}/${endpoint}` : `${base}/v1/${endpoint}`;
+
+        const tokenLimit = isLegacyModel ? 4096 : (model.includes('gpt-4') ? 8192 : 4096);
+        let maxTokens = settings.maxOutputTokens ?? 2048;
+        if (maxTokens > tokenLimit) maxTokens = tokenLimit;
+
+        const requestBody: any = {
+          model,
+          temperature: isO1Model ? 1 : (settings.temperature ?? 0.7)
+        };
+
+        if (isLegacyModel) {
+          requestBody.prompt = messages.map(m => `${m.role === 'system' ? 'Instruction' : m.role.charAt(0).toUpperCase() + m.role.slice(1)}: ${m.content}`).join('\n') + '\nAssistant: ';
+          requestBody.max_tokens = maxTokens;
+        } else {
+          requestBody.messages = messages;
+          if (isO1Model) {
+            requestBody.max_completion_tokens = maxTokens;
+          } else {
+            requestBody.max_tokens = maxTokens;
+          }
+        }
+
+        const res = await fetch('/api/proxy', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            url,
+            method: 'POST',
+            headers: {
+              'Authorization': `Bearer ${provider.apiKey}`,
+              'Content-Type': 'application/json'
+            },
+            body: requestBody
+          })
+        });
+
+        if (!res.ok) {
+          const errData = await res.json();
+          throw new Error(errData.error?.message || errData.message || 'Failed to fetch from provider via proxy');
+        }
+
+        const data = await res.json();
+        if (isLegacyModel) {
+          fullText = data.choices?.[0]?.text || '';
+          finalTokens = data.usage?.completion_tokens || 0;
+        } else {
+          fullText = data.choices?.[0]?.message?.content || '';
+          finalTokens = data.usage?.completion_tokens || data.usage?.total_tokens || 0;
+        }
 
         setSessions(prev => prev.map(s => {
           if (s.id === sessionId) {
             return {
               ...s,
-              messages: s.messages.map(m => m.id === assistantMessageId ? { ...m, isStreaming: false, tokenCount: finalTokens || undefined, responseTime } : m),
+              messages: s.messages.map(m => m.id === assistantMessageId ? { 
+                ...m, 
+                content: fullText,
+                isStreaming: false
+              } : m),
               updatedAt: Date.now()
             };
           }
           return s;
         }));
       }
+      
+      const responseTime = (Date.now() - startTime) / 1000;
+
+      setSessions(prev => prev.map(s => {
+        if (s.id === sessionId) {
+          return {
+            ...s,
+            messages: s.messages.map(m => m.id === assistantMessageId ? { 
+              ...m, 
+              isStreaming: false, 
+              tokenCount: finalTokens || undefined, 
+              modelUsed: model,
+              responseTime 
+            } : m),
+            updatedAt: Date.now()
+          };
+        }
+        return s;
+      }));
 
     } catch (err: any) {
       setError(err.message || 'An unexpected error occurred.');
@@ -580,7 +712,8 @@ export default function App() {
       Role: m.role,
       Content: m.content,
       Timestamp: new Date(m.timestamp).toLocaleString(),
-      Tokens: m.tokenCount || '-'
+      Tokens: m.tokenCount || '-',
+      Model: m.modelUsed || 'N/A'
     }));
 
     const ws = XLSX.utils.json_to_sheet(data);
@@ -846,7 +979,7 @@ export default function App() {
                        {m.role === 'assistant' && (m.tokenCount || m.isStreaming) && (
                          <span className="flex items-center gap-2 bg-[#111111] px-3 py-1 rounded-full font-black uppercase tracking-tightest text-[9px] text-[#3b82f6] border border-[#111111]">
                            <Sparkles size={10} className={m.isStreaming ? 'animate-pulse' : ''} /> 
-                           {m.isStreaming ? 'Crafting' : `${m.tokenCount} Tokens`}
+                           {m.isStreaming ? 'Crafting' : `${m.modelUsed ? `${m.modelUsed} | ` : ''}${m.tokenCount} Tokens`}
                          </span>
                        )}
                     </div>
@@ -989,6 +1122,30 @@ export default function App() {
                            ))}
                          </div>
                        </div>
+                       <div className="space-y-3">
+                         <div className="flex justify-between items-center mb-3 text-[10px] font-black uppercase tracking-widest text-[#71717a]">
+                           <label>Provider</label>
+                         </div>
+                         <div className="flex flex-wrap gap-2">
+                           {settings.providers.filter(p => p.enabled).map(p => (
+                             <button
+                               key={p.id}
+                               onClick={() => {
+                                 setSettings(s => ({ ...s, activeProviderId: p.id }));
+                                 // Optionally fetch models for the newly selected provider
+                                 setTimeout(() => fetchModels(true), 0);
+                               }}
+                               className={`px-3 py-1.5 rounded-lg text-[9px] font-black uppercase tracking-widest transition-all ${
+                                 (settings.activeProviderId === p.id || (!settings.activeProviderId && settings.providers[0]?.id === p.id))
+                                   ? 'bg-[#0070f3] text-white shadow-lg shadow-[#0070f3]/20'
+                                   : 'bg-[#111111] text-[#71717a] hover:text-white border border-white/5'
+                               }`}
+                             >
+                               {p.name}
+                             </button>
+                           ))}
+                         </div>
+                       </div>
                       <div>
                          <div className="flex justify-between mb-3 text-[10px] font-black uppercase tracking-widest text-[#71717a]">
                           <label>Logical Depth</label>
@@ -1101,43 +1258,127 @@ export default function App() {
                 </button>
               </div>
 
-              <div className="space-y-6">
-                <div>
-                  <label className="block text-sm font-semibold mb-2 flex items-center justify-between">
-                    <span>API Credentials</span>
-                    <a href="https://aistudio.google.com/app/apikey" target="_blank" className="text-[var(--accent-app)] hover:underline flex items-center gap-1 text-[10px] font-bold uppercase tracking-widest">
-                      Get Key <ExternalLink size={10} />
-                    </a>
-                  </label>
-                  <input 
-                    type="password"
-                    value={settings.apiKey}
-                    onChange={(e) => setSettings(s => ({ ...s, apiKey: e.target.value }))}
-                    placeholder="Enter authentication key"
-                    className="w-full bg-slate-50 dark:bg-slate-800 border border-[var(--border-app)] rounded-none py-3 px-4 focus:outline-none focus:ring-1 focus:ring-[var(--accent-app)] transition-all font-mono text-sm"
-                  />
+              <div className="space-y-6 max-h-[60vh] overflow-y-auto pr-2 custom-scrollbar">
+                <div className="space-y-4">
+                  <div className="flex items-center justify-between">
+                    <span className="text-[10px] font-black uppercase tracking-[0.4em] text-[#0070f3]">Active Intelligence Provider</span>
+                  </div>
+                  <select
+                    value={settings.activeProviderId || settings.providers[0]?.id}
+                    onChange={(e) => setSettings(s => ({ ...s, activeProviderId: e.target.value }))}
+                    className="w-full bg-slate-50 dark:bg-slate-800 border border-[var(--border-app)] rounded-none py-3 px-4 focus:outline-none focus:ring-1 focus:ring-[var(--accent-app)] transition-all font-mono text-sm text-[var(--accent-app)]"
+                  >
+                    {settings.providers.map(p => (
+                      <option key={p.id} value={p.id}>{p.name} {p.enabled ? '' : '(Disabled)'}</option>
+                    ))}
+                  </select>
                 </div>
 
-                <div>
-                  <label className="block text-sm font-semibold mb-2">Base Endpoint URL</label>
-                  <input 
-                    value={settings.baseUrl}
-                    onChange={(e) => setSettings(s => ({ ...s, baseUrl: e.target.value }))}
-                    className="w-full bg-slate-50 dark:bg-slate-800 border border-[var(--border-app)] rounded-none py-3 px-4 focus:outline-none focus:ring-1 focus:ring-[var(--accent-app)] transition-all font-mono text-xs"
-                  />
+                <div className="space-y-6 pt-4 border-t border-[var(--border-app)]">
+                  <div className="flex items-center justify-between">
+                    <span className="text-[10px] font-black uppercase tracking-[0.4em] text-[#71717a]">Manage Providers</span>
+                    <button 
+                      onClick={() => {
+                        const newProvider = {
+                          id: generateId(),
+                          name: 'New Provider',
+                          apiKey: '',
+                          baseUrl: 'https://api.openai.com',
+                          enabled: true
+                        };
+                        setSettings(s => ({ ...s, providers: [...s.providers, newProvider] }));
+                      }}
+                      className="text-[var(--accent-app)] hover:underline flex items-center gap-1 text-[10px] font-black uppercase tracking-widest"
+                    >
+                      Add Provider <Plus size={10} />
+                    </button>
+                  </div>
+
+                  {settings.providers.map((provider, idx) => (
+                    <div key={provider.id} className="p-4 bg-slate-50 dark:bg-slate-800/50 border border-[var(--border-app)] space-y-4 relative group/item">
+                      <div className="flex items-center justify-between mb-2">
+                        <input 
+                          value={provider.name}
+                          onChange={(e) => {
+                            const newProviders = [...settings.providers];
+                            newProviders[idx].name = e.target.value;
+                            setSettings(s => ({ ...s, providers: newProviders }));
+                          }}
+                          className="bg-transparent border-none focus:ring-0 font-bold text-sm text-[var(--accent-app)] p-0 w-2/3"
+                        />
+                        <div className="flex items-center gap-2">
+                          <button 
+                            onClick={() => {
+                              const newProviders = [...settings.providers];
+                              newProviders[idx].enabled = !newProviders[idx].enabled;
+                              setSettings(s => ({ ...s, providers: newProviders }));
+                            }}
+                            className={`p-1.5 rounded-none border transition-colors ${provider.enabled ? 'bg-green-500/10 border-green-500/50 text-green-500' : 'bg-red-500/10 border-red-500/50 text-red-500'}`}
+                            title={provider.enabled ? 'Disable' : 'Enable'}
+                          >
+                            <Sparkles size={12} />
+                          </button>
+                          {settings.providers.length > 1 && (
+                            <button 
+                              onClick={() => {
+                                const newProviders = settings.providers.filter(p => p.id !== provider.id);
+                                setSettings(s => ({ 
+                                  ...s, 
+                                  providers: newProviders,
+                                  activeProviderId: settings.activeProviderId === provider.id ? newProviders[0].id : settings.activeProviderId
+                                }));
+                              }}
+                              className="p-1.5 bg-red-500/10 border border-red-500/50 text-red-500 rounded-none"
+                            >
+                              <Trash2 size={12} />
+                            </button>
+                          )}
+                        </div>
+                      </div>
+                      
+                      <div className="space-y-2">
+                        <label className="block text-[9px] font-black uppercase tracking-widest text-[#71717a]">Authentication Key</label>
+                        <input 
+                          type="password"
+                          value={provider.apiKey}
+                          onChange={(e) => {
+                            const newProviders = [...settings.providers];
+                            newProviders[idx].apiKey = e.target.value;
+                            setSettings(s => ({ ...s, providers: newProviders }));
+                          }}
+                          placeholder="API Key"
+                          className="w-full bg-white dark:bg-slate-900 border border-[var(--border-app)] rounded-none py-2 px-3 focus:outline-none focus:ring-1 focus:ring-[var(--accent-app)] transition-all font-mono text-xs"
+                        />
+                      </div>
+
+                      <div className="space-y-2">
+                        <label className="block text-[9px] font-black uppercase tracking-widest text-[#71717a]">Base Endpoint URL</label>
+                        <input 
+                          value={provider.baseUrl}
+                          onChange={(e) => {
+                            const newProviders = [...settings.providers];
+                            newProviders[idx].baseUrl = e.target.value;
+                            setSettings(s => ({ ...s, providers: newProviders }));
+                          }}
+                          placeholder="https://api.openai.com"
+                          className="w-full bg-white dark:bg-slate-900 border border-[var(--border-app)] rounded-none py-2 px-3 focus:outline-none focus:ring-1 focus:ring-[var(--accent-app)] transition-all font-mono text-[10px]"
+                        />
+                      </div>
+                    </div>
+                  ))}
                 </div>
 
-                <div>
-                  <label className="block text-sm font-black uppercase tracking-widest mb-2 flex items-center justify-between">
-                    <span>AI Model Designation</span>
+                <div className="space-y-6 pt-4 border-t border-[var(--border-app)]">
+                  <div className="flex items-center justify-between">
+                    <span className="text-[10px] font-black uppercase tracking-[0.4em] text-[#71717a]">Model Designation</span>
                     <button 
                       onClick={() => fetchModels(false)}
                       disabled={fetchingModels}
-                      className="text-[var(--accent-app)] hover:underline flex items-center gap-1 text-[10px] font-bold uppercase tracking-widest disabled:opacity-50"
+                      className="text-[var(--accent-app)] hover:underline flex items-center gap-1 text-[10px] font-black uppercase tracking-widest disabled:opacity-50"
                     >
                       {fetchingModels ? 'Syncing...' : 'Sync Models'} <RefreshCw size={10} className={fetchingModels ? 'animate-spin' : ''} />
                     </button>
-                  </label>
+                  </div>
                   <select
                     value={settings.model}
                     onChange={(e) => setSettings(s => ({ ...s, model: e.target.value }))}
@@ -1150,9 +1391,8 @@ export default function App() {
                       <option key={m} value={m}>{m}</option>
                     ))}
                   </select>
-                  <p className="text-[10px] text-[var(--text-secondary)] mt-1 uppercase tracking-wider">Sync models to populate the dropdown.</p>
+                  <p className="text-[10px] text-[var(--text-secondary)] uppercase tracking-wider">Sync models for the active provider to populate the dropdown.</p>
                 </div>
-
               </div>
 
               <div className="mt-8 pt-6 border-t border-[var(--border-app)] relative group">
