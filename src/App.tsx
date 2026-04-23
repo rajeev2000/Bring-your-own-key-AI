@@ -920,68 +920,6 @@ export default function App() {
         <div className="relative border-t border-[#111111] bg-[#000000] p-2 sm:p-10 transition-all">
           <div className="max-w-5xl mx-auto space-y-4 sm:space-y-6">
             
-            {/* Dynamic Action Bar (Consolidated and less floaty) */}
-            <div className="flex flex-wrap items-center gap-2 sm:gap-4 px-3 py-2 sm:px-4 sm:py-3 bg-[#0a0a0a]/50 border border-[#111111] rounded-2xl shadow-xl backdrop-blur-md">
-              <div className="flex items-center gap-2 flex-1 min-w-[200px] relative">
-                 <button 
-                   onClick={() => setShowStrategy(!showStrategy)}
-                   className="flex-1 flex items-center gap-2 sm:gap-3 bg-transparent py-2 group text-left"
-                 >
-                   <div className="text-[#0070f3] opacity-80"><Sparkles size={16} /></div>
-                   <span className="text-[#0070f3] text-xs font-black uppercase tracking-[0.2em] truncate">
-                     {settings.model || DEFAULT_MODEL}
-                   </span>
-                   <ChevronDown size={14} className="text-[#71717a] ml-auto group-hover:text-white transition-colors" />
-                 </button>
-                 
-                 <AnimatePresence>
-                   {showStrategy && (
-                     <motion.div
-                       initial={{ opacity: 0, y: -10 }}
-                       animate={{ opacity: 1, y: 0 }}
-                       exit={{ opacity: 0, y: -10 }}
-                       className="absolute bottom-full left-0 mb-3 w-[calc(100vw-2rem)] sm:w-80 max-w-sm bg-[#0a0a0a] border border-[#111111] rounded-2xl shadow-2xl overflow-hidden z-50 p-2"
-                     >
-                       <div className="max-h-60 overflow-y-auto custom-scrollbar pr-2">
-                         {(availableModels.length > 0 ? availableModels : [settings.model || DEFAULT_MODEL]).map(m => (
-                           <button
-                             key={m}
-                             onClick={() => {
-                               setSettings(s => ({ ...s, model: m }));
-                               setShowStrategy(false);
-                             }}
-                             className={`w-full text-left px-4 py-3 rounded-xl text-xs font-bold uppercase tracking-[0.1em] transition-colors ${settings.model === m ? 'bg-[#0070f3]/10 text-[#0070f3]' : 'text-white hover:bg-[#111111]'}`}
-                           >
-                             {m}
-                           </button>
-                         ))}
-                       </div>
-                     </motion.div>
-                   )}
-                 </AnimatePresence>
-                 
-                 <button 
-                   onClick={() => fetchModels()}
-                   className="p-2 hover:bg-[#111111] rounded-full transition-all text-[#71717a] hover:text-[#0070f3] group"
-                   title="Sync Models"
-                 >
-                   <RefreshCw size={14} className={`${fetchingModels ? 'animate-spin' : ''} group-hover:scale-110`} />
-                 </button>
-              </div>
-
-              <div className="h-4 w-[1px] bg-[#111111] hidden sm:block" />
-
-              <button 
-                onClick={() => setShowParamMenu(!showParamMenu)}
-                className={`flex items-center gap-2 px-6 py-2 rounded-full border transition-all text-[10px] font-black uppercase tracking-widest ${
-                  showParamMenu ? 'bg-[#0070f3] border-[#0070f3] text-white shadow-lg shadow-[#0070f3]/30' : 'bg-[#111111] border-[#222222] text-[#71717a] hover:text-white hover:border-[#0070f3]'
-                }`}
-              >
-                <Sliders size={14} />
-                <span>Strategy</span>
-              </button>
-            </div>
-
             {/* Attachment Preview (Fixed Gap) */}
             <AnimatePresence>
               {attachments.length > 0 && (
@@ -1023,12 +961,34 @@ export default function App() {
                     initial={{ opacity: 0, y: 10, scale: 0.98 }}
                     animate={{ opacity: 1, y: 0, scale: 1 }}
                     exit={{ opacity: 0, y: 10, scale: 0.98 }}
-                    className="absolute bottom-full right-0 sm:left-0 mb-5 w-[calc(100vw-2rem)] sm:w-80 max-w-sm bg-[#0a0a0a] border border-[#111111] shadow-2xl p-6 sm:p-7 z-50 rounded-3xl backdrop-blur-2xl"
+                    className="absolute bottom-full left-0 mb-4 w-[calc(100vw-2rem)] sm:w-80 max-w-sm bg-[#0a0a0a] border border-[#111111] shadow-2xl p-6 sm:p-7 z-50 rounded-3xl backdrop-blur-2xl"
                   >
                     <div className="flex justify-between items-center mb-6">
-                      <span className="text-[10px] font-black uppercase tracking-[0.4em] text-[#0070f3]">Synthesizer Settings</span>
+                      <span className="text-[10px] font-black uppercase tracking-[0.4em] text-[#0070f3]">Strategy Settings</span>
                     </div>
                     <div className="space-y-8">
+                       <div className="space-y-3">
+                         <div className="flex justify-between items-center mb-3 text-[10px] font-black uppercase tracking-widest text-[#71717a]">
+                           <label>Model</label>
+                           <button onClick={(e) => { e.preventDefault(); fetchModels(); }} className="text-[#0070f3] hover:text-white transition-colors" title="Sync Models">
+                             <RefreshCw size={12} className={fetchingModels ? 'animate-spin' : ''} />
+                           </button>
+                         </div>
+                         <div className="max-h-40 overflow-y-auto custom-scrollbar pr-2 space-y-1">
+                           {(availableModels.length > 0 ? availableModels : [settings.model || DEFAULT_MODEL]).map(m => (
+                             <button
+                               key={m}
+                               onClick={() => {
+                                 setSettings(s => ({ ...s, model: m }));
+                                 setShowParamMenu(false);
+                               }}
+                               className={`w-full text-left px-3 py-2 rounded-lg text-[11px] font-bold uppercase tracking-[0.1em] transition-colors ${settings.model === m ? 'bg-[#0070f3]/10 text-[#0070f3]' : 'text-white hover:bg-[#111111]'}`}
+                             >
+                               {m}
+                             </button>
+                           ))}
+                         </div>
+                       </div>
                       <div>
                          <div className="flex justify-between mb-3 text-[10px] font-black uppercase tracking-widest text-[#71717a]">
                           <label>Logical Depth</label>
@@ -1041,8 +1001,8 @@ export default function App() {
                           step="128"
                           value={settings.maxOutputTokens ?? 2048}
                           onChange={(e) => setSettings(s => ({ ...s, maxOutputTokens: Number(e.target.value) }))}
-                          onMouseUp={() => setShowParamMenu(false)}
-                          onTouchEnd={() => setShowParamMenu(false)}
+                          onMouseUp={() => setTimeout(() => setShowParamMenu(false), 200)}
+                          onTouchEnd={() => setTimeout(() => setShowParamMenu(false), 200)}
                           className="w-full h-1 bg-[#111111] rounded-lg appearance-none cursor-pointer accent-[#0070f3]"
                         />
                       </div>
@@ -1059,13 +1019,22 @@ export default function App() {
                   onChange={handleFileSelect}
                   className="hidden"
                 />
-                <button 
-                  onClick={() => fileInputRef.current?.click()}
-                  className="p-2 sm:p-3 mb-1 sm:mb-1 hover:bg-[#111111] rounded-xl sm:rounded-2xl transition-all text-[#71717a] hover:text-[#0070f3]"
-                  title="Upload Intelligence"
-                >
-                  <Paperclip size={20} className="sm:w-6 sm:h-6" />
-                </button>
+                <div className="flex gap-1 mb-1 sm:mb-1">
+                  <button 
+                    onClick={() => fileInputRef.current?.click()}
+                    className="p-2 sm:p-3 hover:bg-[#111111] rounded-xl sm:rounded-2xl transition-all text-[#71717a] hover:text-[#0070f3]"
+                    title="Upload Intelligence"
+                  >
+                    <Paperclip size={20} className="sm:w-6 sm:h-6" />
+                  </button>
+                  <button 
+                    onClick={() => setShowParamMenu(!showParamMenu)}
+                    className={`p-2 sm:p-3 rounded-xl sm:rounded-2xl transition-all ${showParamMenu ? 'bg-[#0070f3]/10 text-[#0070f3]' : 'hover:bg-[#111111] text-[#71717a] hover:text-[#0070f3]'}`}
+                    title="Strategy Settings"
+                  >
+                    <Sliders size={20} className="sm:w-6 sm:h-6" />
+                  </button>
+                </div>
                 <textarea 
                   value={input}
                   onChange={(e) => {
