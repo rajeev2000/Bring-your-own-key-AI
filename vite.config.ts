@@ -6,14 +6,14 @@ import { VitePWA } from 'vite-plugin-pwa';
 export default defineConfig(({mode}) => {
   const env = loadEnv(mode, '.', '');
   return {
-    base: './',
+    base: '/',
     plugins: [
       react(), 
       VitePWA({
         registerType: 'autoUpdate',
         manifest: {
-          name: 'LUX Secure AI',
-          short_name: 'LUX',
+          name: 'Iluvai Secure AI',
+          short_name: 'Iluvai',
           description: 'Ultra-premium secure local AI assistant',
           theme_color: '#f97316',
           icons: [

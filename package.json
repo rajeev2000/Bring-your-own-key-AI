@@ -5,8 +5,8 @@
   "type": "module",
   "main": "index.js",
   "scripts": {
-    "start": "node server.ts",
-    "dev": "tsx server.ts",
+    "start": "node server.js",
+    "dev": "node server.js",
     "build": "vite build",
     "preview": "vite preview",
     "clean": "rm -rf dist",
@@ -52,7 +52,8 @@
     "remark-gfm": "^4.0.1",
     "vite": "^6.2.0",
     "vite-plugin-pwa": "^1.2.0",
-    "xlsx": "^0.18.5"
+    "xlsx": "^0.18.5",
+    "tsx": "^4.21.0"
   },
   "devDependencies": {
     "@types/express": "^4.17.21",
@@ -61,7 +62,6 @@
     "babel-preset-expo": "^55.0.17",
     "postcss": "^8.5.10",
     "tailwindcss": "^3.3.2",
-    "tsx": "^4.21.0",
     "typescript": "~5.8.2",
     "vite": "^6.2.0"
   },

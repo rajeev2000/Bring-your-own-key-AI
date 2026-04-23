@@ -26,22 +26,13 @@ export interface ChatSession {
   updatedAt: number;
 }
 
-export interface ProviderConfig {
-  id: string;
-  name: string;
+export interface AppSettings {
   apiKey: string;
   baseUrl: string;
-  enabled: boolean;
-  type?: 'openai' | 'google';
-}
-
-export interface AppSettings {
-  providers: ProviderConfig[];
-  activeProviderId?: string;
   model: string;
   temperature?: number;
   maxOutputTokens?: number;
 }
 
 export const DEFAULT_MODEL = 'gemini-1.5-flash';
-export const DEFAULT_BASE_URL = 'https://generativelanguage.googleapis.com';
+export const DEFAULT_BASE_URL = 'https://api.openai.com/v1';

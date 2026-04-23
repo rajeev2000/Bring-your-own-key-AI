@@ -39,7 +39,7 @@ import { GoogleGenAI } from '@google/genai';
 import { jsPDF } from 'jspdf';
 import * as XLSX from 'xlsx';
 
-import { Message, ChatSession, AppSettings, ProviderConfig, DEFAULT_MODEL, DEFAULT_BASE_URL } from './types';
+import { Message, ChatSession, AppSettings, DEFAULT_MODEL, DEFAULT_BASE_URL } from './types';
 
 const generateId = () => {
   try {
@@ -71,67 +71,24 @@ export default function App() {
     const saved = localStorage.getItem('droidai_settings');
     if (saved) {
       const parsed = JSON.parse(saved);
-      // Migration for old settings
-      if (!parsed.providers) {
-        return {
-          providers: [
-            {
-              id: generateId(),
-              name: 'Google AI',
-              apiKey: parsed.apiKey || '',
-              baseUrl: parsed.baseUrl || DEFAULT_BASE_URL,
-              enabled: true
-            },
-            {
-              id: generateId(),
-              name: 'OpenAI',
-              apiKey: '',
-              baseUrl: 'https://api.openai.com',
-              enabled: true
-            }
-          ],
-          activeProviderId: undefined,
-          model: parsed.model || DEFAULT_MODEL,
-          theme: 'system',
-          maxOutputTokens: parsed.maxOutputTokens || 2048
-        };
-      }
-      return parsed;
+      // Migration and sanitization
+      return {
+        apiKey: parsed.apiKey || (parsed.providers?.[0]?.apiKey) || '',
+        baseUrl: parsed.baseUrl || (parsed.providers?.[0]?.baseUrl) || DEFAULT_BASE_URL,
+        model: parsed.model || DEFAULT_MODEL,
+        temperature: parsed.temperature || 0.7,
+        maxOutputTokens: parsed.maxOutputTokens || 2048,
+        ...parsed
+      };
     }
     return {
-      providers: [
-        {
-          id: generateId(),
-          name: 'Google AI',
-          apiKey: '',
-          baseUrl: DEFAULT_BASE_URL,
-          enabled: true
-        },
-        {
-          id: generateId(),
-          name: 'OpenAI',
-          apiKey: '',
-          baseUrl: 'https://api.openai.com',
-          enabled: true
-        }
-      ],
-      activeProviderId: undefined,
+      apiKey: '',
+      baseUrl: DEFAULT_BASE_URL,
       model: DEFAULT_MODEL,
-      theme: 'system',
+      temperature: 0.7,
       maxOutputTokens: 2048
     };
   });
-
-  const getActiveProvider = () => {
-    if (settings.activeProviderId) {
-      return settings.providers.find(p => p.id === settings.activeProviderId);
-    }
-    // Fallback search by model name or just first one
-    if (settings.model.includes('gpt')) {
-      return settings.providers.find(p => p.name.toLowerCase().includes('openai'));
-    }
-    return settings.providers.find(p => p.name.toLowerCase().includes('google')) || settings.providers[0];
-  };
 
   const scrollRef = useRef<HTMLDivElement>(null);
 
@@ -178,66 +135,43 @@ export default function App() {
     }
   }, [sessions, activeSessionId, loadingSessions]);
 
-  const addProvider = () => {
-    const newProvider: ProviderConfig = {
-      id: generateId(),
-      name: 'New Provider',
-      apiKey: '',
-      baseUrl: 'https://api.openai.com',
-      enabled: true
-    };
-    setSettings(s => ({ ...s, providers: [...s.providers, newProvider] }));
-  };
-
-  const deleteProvider = (id: string) => {
-    setSettings(s => {
-      const filtered = s.providers.filter(p => p.id !== id);
-      return { 
-        ...s, 
-        providers: filtered,
-        activeProviderId: s.activeProviderId === id ? (filtered[0]?.id || undefined) : s.activeProviderId
-      };
-    });
-  };
-
+    // ─── FIX: constructUrl now auto-injects /v1 safely ───────────────────
   const constructUrl = (baseUrl: string, suffix: string) => {
     let base = baseUrl.trim().replace(/\/+$/, '');
-    if (!base.startsWith('http')) base = 'https://' + base;
-    
-    // If the user already provided the endpoint, use it directly
-    if (base.endsWith(suffix) || base.endsWith(suffix.replace(/^\//, ''))) return base;
-    
-    // Check if /v1 is already there
-    if (base.includes('/v1')) {
-      // If it ends with /v1, just append the suffix without /v1
-      if (base.endsWith('/v1')) {
-        const cleanSuffix = suffix.startsWith('/v1/') ? suffix.replace('/v1/', '/') : suffix;
-        return `${base}${cleanSuffix.startsWith('/') ? cleanSuffix : '/' + cleanSuffix}`;
-      }
-      // If it contains /v1 but not at the end (like /v1/custom), just append suffix
-      return `${base}${suffix.startsWith('/') ? suffix : '/' + suffix}`;
+    const cleanSuffix = suffix.replace(/^\//, '');
+
+    // If the base URL already ends with the full endpoint path, return as-is
+    if (base.endsWith(cleanSuffix)) {
+      return base;
     }
-    
-    // Standard case: append /v1/ if not present
-    const cleanSuffix = suffix.startsWith('/') ? suffix : '/' + suffix;
-    const finalSuffix = cleanSuffix.startsWith('/v1/') ? cleanSuffix : `/v1${cleanSuffix}`;
-    return `${base}${finalSuffix}`;
+
+    // Auto-inject /v1 if no version segment (v1, v2, v1beta) exists
+    // Only inject if we are missing a version segment AND not already containing the target suffix
+    const hasVersion = /\/v\d+([a-z0-9]*)?($|\/)/.test(base);
+    if (!hasVersion && !base.includes(cleanSuffix)) {
+      base = `${base}/v1`;
+    }
+
+    const endpoint = suffix.startsWith('/') ? suffix : `/${suffix}`;
+    return `${base}${endpoint}`;
   };
+  // ───────────────────────────────────────────────────────────────────────────
 
   const fetchModels = async (silent = false) => {
-    const provider = getActiveProvider();
-    if (!provider || !provider.apiKey) {
-      if (!silent) setError("Provide an API key for the active provider before syncing.");
+    if (fetchingModels) return;
+    
+    if (!settings.apiKey) {
+      if (!silent) setError("Provide an API key in settings before syncing.");
       return;
     }
     setFetchingModels(true);
     try {
-      const isGemini = provider.type === 'google' || (provider.type === undefined && provider.baseUrl.includes('generative'));
+      const isGemini = settings.baseUrl.includes('generative');
       
       if (isGemini) {
         const ai = new GoogleGenAI({ 
-          apiKey: provider.apiKey,
-          httpOptions: provider.baseUrl !== DEFAULT_BASE_URL ? { baseUrl: provider.baseUrl } : undefined
+          apiKey: settings.apiKey,
+          httpOptions: settings.baseUrl !== DEFAULT_BASE_URL ? { baseUrl: settings.baseUrl } : undefined
         });
         const modelsResult = await ai.models.list();
         const modelsArray: string[] = [];
@@ -246,16 +180,15 @@ export default function App() {
         }
         setAvailableModels(modelsArray);
       } else {
-        const url = constructUrl(provider.baseUrl, 'models');
+        const url = constructUrl(settings.baseUrl, 'models');
         
-        // Use local proxy to avoid CORS
-        const res = await fetch('/local-proxy', {
+        const res = await fetch('p', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             url: url,
             method: 'GET',
-            headers: { 'Authorization': `Bearer ${provider.apiKey}` }
+            headers: { 'Authorization': `Bearer ${settings.apiKey}` }
           })
         });
         
@@ -270,7 +203,27 @@ export default function App() {
           } else {
             errorBody = await res.text();
           }
-          throw new Error(errorBody ? `${res.status}: ${errorBody.slice(0, 500)}` : `Endpoint returned ${res.status}: ${res.statusText}`);
+          // ─── FIX: smarter hint on 404 ───────────────────────────────────
+          let hint = '';
+          if (res.status === 404) {
+             const base = settings.baseUrl.replace(/\/+$/, '');
+             if (!base.includes('/v1') && !base.includes('/v2')) {
+                hint = ` — Your Base URL might be missing /v1. Try adding /v1 to the end.`;
+             } else {
+                hint = ` — Model list not found. Double-check your Base URL or endpoint support.`;
+             }
+          } else if (res.status === 401) {
+             hint = ` — Invalid or missing API key.`;
+          } else if (res.status === 429) {
+             hint = ` — Too many requests. Please wait a moment before trying again.`;
+          }
+          
+          throw new Error(
+            errorBody
+              ? `${res.status}: ${errorBody.slice(0, 300)}${hint}`
+              : `Endpoint returned ${res.status}: ${res.statusText}${hint}`
+          );
+          // ────────────────────────────────────────────────────────────────
         }
         
         if (!isJson) {
@@ -299,8 +252,7 @@ export default function App() {
   };
 
   useEffect(() => {
-     const provider = getActiveProvider();
-     if (provider?.apiKey) {
+     if (settings.apiKey) {
        fetchModels(true);
      }
   }, []);
@@ -397,7 +349,6 @@ export default function App() {
   const handleDragLeave = (e: React.DragEvent) => {
     e.preventDefault();
     e.stopPropagation();
-    // Only set to false if we're actually leaving the container
     if (e.currentTarget === e.target) {
       setIsDragging(false);
     }
@@ -432,13 +383,11 @@ export default function App() {
 
   const handleSendMessage = async () => {
     if (!input.trim() && attachments.length === 0) return;
-    if (isSessionLoading(activeSessionId)) return;
-    
-    const provider = getActiveProvider();
-
-    if (!provider || !provider.apiKey) {
-      setError('Please provide an API key for the active provider in settings.');
-      setShowSettings(true);
+    if (isSessionLoading(activeSessionId) || !settings.apiKey) {
+      if (!settings.apiKey) {
+        setError('Please provide an API key in settings.');
+        setShowSettings(true);
+      }
       return;
     }
 
@@ -490,7 +439,7 @@ export default function App() {
 
       const currentSession = updatedSessions.find(s => s.id === sessionId)!;
       const model = settings.model || DEFAULT_MODEL;
-      const isGemini = provider.type === 'google' || (provider.type === undefined && provider.baseUrl.includes('generative'));
+      const isGemini = settings.baseUrl.includes('generative');
 
       let sysInstruction = "You are Iluvai AI, an ultra-premium, luxury AI assistant. You speak with confidence and precision. MANDATORY: All data tables must be formatted as Github Flavored Markdown (GFM) tables. Always add a luxury spin to your responses.";
       if (settings.maxOutputTokens !== undefined && settings.maxOutputTokens > 0) {
@@ -524,8 +473,8 @@ export default function App() {
 
       if (isGemini) {
         const ai = new GoogleGenAI({ 
-          apiKey: provider.apiKey,
-          httpOptions: provider.baseUrl !== DEFAULT_BASE_URL ? { baseUrl: provider.baseUrl } : undefined
+          apiKey: settings.apiKey,
+          httpOptions: settings.baseUrl !== DEFAULT_BASE_URL ? { baseUrl: settings.baseUrl } : undefined
         });
         
         const history = currentSession.messages.map(m => {
@@ -625,9 +574,8 @@ export default function App() {
           })
         ];
 
-        let base = provider.baseUrl.trim();
         const endpoint = isLegacyModel ? 'completions' : 'chat/completions';
-        const url = constructUrl(base, endpoint);
+        const url = constructUrl(settings.baseUrl, endpoint);
 
         const tokenLimit = isLegacyModel ? 4096 : (model.includes('gpt-4') ? 8192 : 4096);
         let maxTokens = settings.maxOutputTokens ?? 2048;
@@ -650,14 +598,14 @@ export default function App() {
           }
         }
 
-        const res = await fetch('/local-proxy', {
+        const res = await fetch('p', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             url,
             method: 'POST',
             headers: {
-              'Authorization': `Bearer ${provider.apiKey}`,
+              'Authorization': `Bearer ${settings.apiKey}`,
               'Content-Type': 'application/json'
             },
             body: requestBody
@@ -675,7 +623,27 @@ export default function App() {
           } else {
             errorBody = await res.text();
           }
-          throw new Error(errorBody ? `${res.status}: ${errorBody.slice(0, 500)}` : `Failed to fetch from provider via proxy (${res.status})`);
+          // ─── FIX: smarter hint on 404 / 401 ────────────────────────────
+          let hint = '';
+          if (res.status === 404) {
+             const base = settings.baseUrl.replace(/\/+$/, '');
+             if (!base.includes('/v1') && !base.includes('/v2')) {
+                hint = ` — Check your Base URL. Common mistake: missing /v1 at the end (e.g. https://api.openai.com/v1).`;
+             } else {
+                hint = ` — Chat endpoint not found. Verify your Base URL supports OpenAI-compatible chat.`;
+             }
+          } else if (res.status === 401) {
+             hint = ` — Invalid or missing API key.`;
+          } else if (res.status === 429) {
+             hint = ` — Rate limit exceeded. Please wait before sending more messages.`;
+          }
+
+          throw new Error(
+            errorBody
+              ? `${res.status}: ${errorBody.slice(0, 300)}${hint}`
+              : `Failed to fetch from provider via proxy (${res.status})${hint}`
+          );
+          // ────────────────────────────────────────────────────────────────
         }
 
         if (!isJson) {
@@ -1111,11 +1079,11 @@ export default function App() {
           )}
         </div>
 
-        {/* Interraction Area (Input & Controls) */}
+        {/* Interaction Area (Input & Controls) */}
         <div className="relative border-t border-[#111111] bg-[#000000] p-2 sm:p-10 transition-all">
           <div className="max-w-5xl mx-auto space-y-4 sm:space-y-6">
             
-            {/* Attachment Preview (Fixed Gap) */}
+            {/* Attachment Preview */}
             <AnimatePresence>
               {attachments.length > 0 && (
                 <motion.div 
@@ -1184,30 +1152,7 @@ export default function App() {
                            ))}
                          </div>
                        </div>
-                       <div className="space-y-3">
-                         <div className="flex justify-between items-center mb-3 text-[10px] font-black uppercase tracking-widest text-[#71717a]">
-                           <label>Provider</label>
-                         </div>
-                         <div className="flex flex-wrap gap-2">
-                           {settings.providers.filter(p => p.enabled).map(p => (
-                             <button
-                               key={p.id}
-                               onClick={() => {
-                                 setSettings(s => ({ ...s, activeProviderId: p.id }));
-                                 // Optionally fetch models for the newly selected provider
-                                 setTimeout(() => fetchModels(true), 0);
-                               }}
-                               className={`px-3 py-1.5 rounded-lg text-[9px] font-black uppercase tracking-widest transition-all ${
-                                 (settings.activeProviderId === p.id || (!settings.activeProviderId && settings.providers[0]?.id === p.id))
-                                   ? 'bg-[#0070f3] text-white shadow-lg shadow-[#0070f3]/20'
-                                   : 'bg-[#111111] text-[#71717a] hover:text-white border border-white/5'
-                               }`}
-                             >
-                               {p.name}
-                             </button>
-                           ))}
-                         </div>
-                       </div>
+
                       <div>
                          <div className="flex justify-between mb-3 text-[10px] font-black uppercase tracking-widest text-[#71717a]">
                           <label>Logical Depth</label>
@@ -1322,121 +1267,33 @@ export default function App() {
 
               <div className="space-y-6 max-h-[60vh] overflow-y-auto pr-2 custom-scrollbar">
                 <div className="space-y-4">
-                  <div className="flex items-center justify-between">
-                    <span className="text-[10px] font-black uppercase tracking-[0.4em] text-[#0070f3]">Active Intelligence Provider</span>
-                    <button 
-                      onClick={addProvider}
-                      className="text-[var(--accent-app)] hover:text-white transition-colors flex items-center gap-1 text-[9px] font-black uppercase tracking-widest"
-                    >
-                      <Plus size={10} /> Add New
-                    </button>
+                  <div className="space-y-2">
+                    <label className="block text-[9px] font-black uppercase tracking-widest text-[#71717a]">Access Token</label>
+                    <input 
+                      type="password"
+                      value={settings.apiKey}
+                      onChange={(e) => setSettings(s => ({ ...s, apiKey: e.target.value }))}
+                      placeholder="API Key"
+                      className="w-full bg-slate-50 dark:bg-slate-800 border border-[var(--border-app)] rounded-none py-3 px-4 focus:outline-none focus:ring-1 focus:ring-[var(--accent-app)] transition-all font-mono text-sm"
+                    />
                   </div>
-                  <select
-                    value={settings.activeProviderId || settings.providers[0]?.id}
-                    onChange={(e) => setSettings(s => ({ ...s, activeProviderId: e.target.value }))}
-                    className="w-full bg-slate-50 dark:bg-slate-800 border border-[var(--border-app)] rounded-none py-3 px-4 focus:outline-none focus:ring-1 focus:ring-[var(--accent-app)] transition-all font-mono text-sm text-[var(--accent-app)]"
-                  >
-                    {settings.providers.map(p => (
-                      <option key={p.id} value={p.id}>{p.name}</option>
-                    ))}
-                  </select>
-                </div>
 
-                <div className="space-y-4 pt-4 border-t border-[var(--border-app)]">
-                  {settings.providers.map((provider, idx) => (
-                    <div key={provider.id} className="p-4 bg-slate-50 dark:bg-slate-800/50 border border-[var(--border-app)] space-y-4 relative group">
-                      <div className="flex items-center justify-between gap-3">
-                        {editingProviderId === provider.id ? (
-                          <input 
-                            autoFocus
-                            className="bg-transparent border-b border-[var(--accent-app)] text-sm font-bold text-white focus:outline-none flex-1"
-                            value={provider.name}
-                            onChange={(e) => {
-                              const newProviders = [...settings.providers];
-                              newProviders[idx].name = e.target.value;
-                              setSettings(s => ({ ...s, providers: newProviders }));
-                            }}
-                            onBlur={() => setEditingProviderId(null)}
-                            onKeyDown={(e) => e.key === 'Enter' && setEditingProviderId(null)}
-                          />
-                        ) : (
-                          <div className="flex items-center gap-2 flex-1 min-w-0">
-                            <span 
-                              className="text-sm font-bold text-white uppercase tracking-wider truncate cursor-pointer hover:text-[var(--accent-app)] transition-colors"
-                              onClick={() => setEditingProviderId(provider.id)}
-                            >
-                              {provider.name}
-                            </span>
-                            <button 
-                              onClick={() => setEditingProviderId(provider.id)}
-                              className="opacity-0 group-hover:opacity-100 p-1 text-[#71717a] hover:text-white transition-all"
-                            >
-                              <RefreshCw size={10} />
-                            </button>
-                          </div>
-                        )}
-                        <div className="flex items-center gap-2">
-                          <button 
-                            onClick={() => deleteProvider(provider.id)}
-                            className="p-1.5 hover:bg-red-500/10 text-red-500 rounded-sm transition-colors"
-                            title="Delete Source"
-                          >
-                            <Trash2 size={14} />
-                          </button>
-                        </div>
-                      </div>
+                  <div className="space-y-2">
+                    <label className="block text-[9px] font-black uppercase tracking-widest text-[#71717a]">
+                      Base Endpoint URL
+                      <span className="ml-2 text-[#0070f3] normal-case font-normal">
+                        (include /v1 for OpenAI-compatible APIs)
+                      </span>
+                    </label>
+                    <input 
+                      value={settings.baseUrl}
+                      onChange={(e) => setSettings(s => ({ ...s, baseUrl: e.target.value }))}
+                      placeholder="https://api.openai.com/v1"
+                      className="w-full bg-slate-50 dark:bg-slate-800 border border-[var(--border-app)] rounded-none py-3 px-4 focus:outline-none focus:ring-1 focus:ring-[var(--accent-app)] transition-all font-mono text-sm"
+                    />
+                  </div>
 
-                      <div className="space-y-4">
-                        <div className="grid grid-cols-2 gap-4">
-                          <div className="space-y-2">
-                            <label className="block text-[9px] font-black uppercase tracking-widest text-[#71717a]">Provider Type</label>
-                            <select 
-                              value={provider.type || (provider.baseUrl.includes('generative') ? 'google' : 'openai')}
-                              onChange={(e) => {
-                                const newProviders = [...settings.providers];
-                                newProviders[idx].type = e.target.value as any;
-                                setSettings(s => ({ ...s, providers: newProviders }));
-                              }}
-                              className="w-full bg-white dark:bg-slate-900 border border-[var(--border-app)] rounded-none py-2 px-3 focus:outline-none focus:ring-1 focus:ring-[var(--accent-app)] transition-all font-mono text-xs"
-                            >
-                              <option value="openai">OpenAI Compatible</option>
-                              <option value="google">Google AI</option>
-                            </select>
-                          </div>
-                          <div className="space-y-2">
-                            <label className="block text-[9px] font-black uppercase tracking-widest text-[#71717a]">Access Token</label>
-                            <input 
-                              type="password"
-                              value={provider.apiKey}
-                              onChange={(e) => {
-                                const newProviders = [...settings.providers];
-                                newProviders[idx].apiKey = e.target.value;
-                                setSettings(s => ({ ...s, providers: newProviders }));
-                              }}
-                              placeholder="API Key"
-                              className="w-full bg-white dark:bg-slate-900 border border-[var(--border-app)] rounded-none py-2 px-3 focus:outline-none focus:ring-1 focus:ring-[var(--accent-app)] transition-all font-mono text-xs"
-                            />
-                          </div>
-                        </div>
-
-                        <div className="space-y-2">
-                          <label className="block text-[9px] font-black uppercase tracking-widest text-[#71717a]">Base Endpoint URL</label>
-                          <input 
-                            value={provider.baseUrl}
-                            onChange={(e) => {
-                              const newProviders = [...settings.providers];
-                              newProviders[idx].baseUrl = e.target.value;
-                              setSettings(s => ({ ...s, providers: newProviders }));
-                            }}
-                            placeholder="https://api.openai.com"
-                            className="w-full bg-white dark:bg-slate-900 border border-[var(--border-app)] rounded-none py-2 px-3 focus:outline-none focus:ring-1 focus:ring-[var(--accent-app)] transition-all font-mono text-[10px]"
-                          />
-                        </div>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-                  <div className="flex items-center justify-between">
+                  <div className="flex items-center justify-between pt-4">
                     <span className="text-[10px] font-black uppercase tracking-[0.4em] text-[#71717a]">Model Designation</span>
                     <button 
                       onClick={() => fetchModels(false)}
@@ -1458,8 +1315,9 @@ export default function App() {
                       <option key={m} value={m}>{m}</option>
                     ))}
                   </select>
-                  <p className="text-[10px] text-[var(--text-secondary)] uppercase tracking-wider">Sync models for the active provider to populate the dropdown.</p>
+                  <p className="text-[10px] text-[var(--text-secondary)] uppercase tracking-wider">Ensure your API key and Base URL are correct, then sync models.</p>
                 </div>
+              </div>
 
               <div className="mt-8 pt-6 border-t border-[var(--border-app)] relative group">
                 <button 
