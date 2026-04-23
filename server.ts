@@ -13,7 +13,7 @@ async function startServer() {
   app.use(express.json({ limit: '50mb' }));
 
   // Generic proxy for LLM APIs to avoid CORS issues
-  app.post("/api/proxy", async (req, res) => {
+  app.post("/local-proxy", async (req, res) => {
     const { url, method, headers, body } = req.body;
     
     if (!url) {
@@ -35,9 +35,9 @@ async function startServer() {
         const text = await response.text();
         return res.status(response.status).send(text);
       }
-    } catch (error: any) {
+    } catch (error) {
       console.error("Proxy error:", error);
-      return res.status(500).json({ error: error.message || "Failed to proxy request" });
+      return res.status(500).json({ error: error instanceof Error ? error.message : "Failed to proxy request" });
     }
   });
 

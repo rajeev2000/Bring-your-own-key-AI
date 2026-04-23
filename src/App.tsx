@@ -249,7 +249,7 @@ export default function App() {
         const url = constructUrl(provider.baseUrl, 'models');
         
         // Use local proxy to avoid CORS
-        const res = await fetch('/api/proxy', {
+        const res = await fetch('/local-proxy', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
@@ -650,7 +650,7 @@ export default function App() {
           }
         }
 
-        const res = await fetch('/api/proxy', {
+        const res = await fetch('/local-proxy', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
