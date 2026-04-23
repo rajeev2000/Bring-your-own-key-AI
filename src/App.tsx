@@ -313,7 +313,7 @@ export default function App() {
     setError(null);
     const newSession: ChatSession = {
       id: generateId(),
-      title: 'New Iuvai AI session',
+      title: 'New Iluvai AI session',
       messages: [],
       createdAt: Date.now(),
       updatedAt: Date.now()
@@ -466,7 +466,7 @@ export default function App() {
       if (!activeSession) {
         const newSession: ChatSession = {
           id: sessionId,
-          title: currentInput.slice(0, 30) || 'New Iuvai AI Session',
+          title: currentInput.slice(0, 30) || 'New Iluvai AI Session',
           messages: [userMessage],
           createdAt: Date.now(),
           updatedAt: Date.now()
@@ -492,7 +492,7 @@ export default function App() {
       const model = settings.model || DEFAULT_MODEL;
       const isGemini = provider.type === 'google' || (provider.type === undefined && provider.baseUrl.includes('generative'));
 
-      let sysInstruction = "You are Iuvai AI, an ultra-premium, luxury AI assistant. You speak with confidence and precision. MANDATORY: All data tables must be formatted as Github Flavored Markdown (GFM) tables. Always add a luxury spin to your responses.";
+      let sysInstruction = "You are Iluvai AI, an ultra-premium, luxury AI assistant. You speak with confidence and precision. MANDATORY: All data tables must be formatted as Github Flavored Markdown (GFM) tables. Always add a luxury spin to your responses.";
       if (settings.maxOutputTokens !== undefined && settings.maxOutputTokens > 0) {
         sysInstruction += ` IMPORTANT: You must strictly adjust and compress your entire answer to fit fully within ${settings.maxOutputTokens} tokens. Do perfectly finish your thoughts and NEVER cut off your response mid-sentence. Be concise if necessary.`;
       }
@@ -746,12 +746,12 @@ export default function App() {
     const doc = new jsPDF();
     let y = 10;
     doc.setFontSize(16);
-    doc.text(`Iuvai AI Session: ${session.title}`, 10, y);
+    doc.text(`Iluvai AI Session: ${session.title}`, 10, y);
     y += 10;
     doc.setFontSize(10);
     
     session.messages.forEach(m => {
-      const rolePrefix = m.role === 'user' ? 'User: ' : 'Iuvai AI: ';
+      const rolePrefix = m.role === 'user' ? 'User: ' : 'Iluvai AI: ';
       const splitText = doc.splitTextToSize(rolePrefix + m.content, 180);
       
       if (y + splitText.length * 5 > 280) {
@@ -801,7 +801,7 @@ export default function App() {
       const a = document.createElement('a');
       a.style.display = 'none';
       a.href = url;
-      a.download = filename || `iuvai-ai-image-${Date.now()}.jpg`;
+      a.download = filename || `iluvai-ai-image-${Date.now()}.jpg`;
       document.body.appendChild(a);
       a.click();
       
@@ -840,7 +840,7 @@ export default function App() {
                 <div className="w-9 h-9 rounded-none bg-[var(--accent-app)] flex items-center justify-center text-white shadow-xl">
                   <Sparkles size={22} />
                 </div>
-                <span className="tracking-[0.2em]">IUVAI AI</span>
+                <span className="tracking-[0.2em]">ILUVAI AI</span>
               </div>
               <button 
                 onClick={() => setSidebarOpen(false)}
@@ -945,7 +945,7 @@ export default function App() {
                <Layout size={20} />
              </button>
              <h1 className="text-lg font-black tracking-[0.2em] truncate scroll-hide max-w-[200px] sm:max-w-md uppercase text-white">
-               {getActiveSession()?.title || 'IUVAI AI'}
+               {getActiveSession()?.title || 'ILUVAI AI'}
              </h1>
           </div>
           
@@ -985,7 +985,7 @@ export default function App() {
               >
                 <Sparkles size={40} />
               </motion.div>
-              <h2 className="text-4xl font-black mb-4 tracking-tighter uppercase italic text-white leading-none">Iuvai AI</h2>
+              <h2 className="text-4xl font-black mb-4 tracking-tighter uppercase italic text-white leading-none">Iluvai AI</h2>
               <p className="text-[#71717a] mb-10 font-medium tracking-wide">
                 Secure. Minimal. Elite. Your private intelligence architecture.
               </p>
@@ -1093,7 +1093,7 @@ export default function App() {
                 />
                 <div className="flex flex-col">
                   <span className="text-[10px] font-black uppercase tracking-[0.4em] text-[var(--accent-app)] mb-1">Processing</span>
-                  <span className="text-xs font-bold text-[var(--text-secondary)] italic">Iuvai AI is crafting perfection...</span>
+                  <span className="text-xs font-bold text-[var(--text-secondary)] italic">Iluvai AI is crafting perfection...</span>
                 </div>
                 <motion.div 
                   className="absolute inset-0 bg-gradient-to-r from-transparent via-[var(--accent-app)]/5 to-transparent -translate-x-full"
@@ -1288,7 +1288,7 @@ export default function App() {
             </div>
           </div>
           <div className="text-center mt-6 text-[9px] text-[#71717a] uppercase tracking-[0.7em] font-black opacity-40">
-            IUVAI AI <span className="text-[#3b82f6]">|</span> ARCHITECT OF SECURE INTELLIGENCE
+            ILUVAI AI <span className="text-[#3b82f6]">|</span> ARCHITECT OF SECURE INTELLIGENCE
           </div>
         </div>
       </div>

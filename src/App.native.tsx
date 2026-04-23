@@ -249,7 +249,7 @@ export default function App() {
     setError(null);
     const newSession: ChatSession = {
       id: generateId(),
-      title: 'New Iuvai AI Session',
+      title: 'New Iluvai AI Session',
       messages: [],
       createdAt: Date.now(),
       updatedAt: Date.now()
@@ -558,7 +558,7 @@ export default function App() {
         <StyledTouchableOpacity onPress={() => setSidebarOpen(true)} className="p-2">
           <Layout size={22} color="#3b82f6" />
         </StyledTouchableOpacity>
-        <StyledText className="text-white font-black tracking-[0.3em] text-lg uppercase italic">Iuvai AI</StyledText>
+        <StyledText className="text-white font-black tracking-[0.3em] text-lg uppercase italic">Iluvai AI</StyledText>
         <StyledTouchableOpacity onPress={() => setShowSettings(true)} className="p-2">
           <Settings2 size={22} color="#3b82f6" />
         </StyledTouchableOpacity>
@@ -577,7 +577,7 @@ export default function App() {
             <StyledView className="w-24 h-24 rounded-full bg-[#0a0a0a] border border-[#3b82f6]/20 items-center justify-center shadow-2xl shadow-[#3b82f6]/10 mb-8">
               <Sparkles size={50} color="#3b82f6" />
             </StyledView>
-            <StyledText className="text-white text-4xl font-black tracking-tighter uppercase italic text-center">Iuvai AI</StyledText>
+            <StyledText className="text-white text-4xl font-black tracking-tighter uppercase italic text-center">Iluvai AI</StyledText>
             <StyledText className="text-[#a1a1aa] text-center mt-4 font-bold tracking-widest uppercase text-[10px]">Architect of Secure Intelligence</StyledText>
             <StyledView className="mt-12 w-full space-y-4">
               {[
