@@ -185,10 +185,13 @@ export default function App() {
     }
     setFetchingModels(true);
     try {
-      let base = provider.baseUrl.trim().replace(/\/+$/, '');
+      let base = provider.baseUrl.trim();
       if (!base.startsWith('http')) {
         base = 'https://' + base;
       }
+      
+      // Clean base: remove trailing slashes and common API paths to prevent duplication
+      base = base.replace(/\/+$/, '').replace(/\/(v1|chat|completions|models)$/g, '').replace(/\/v1$/g, '');
       
       const isGemini = base.includes('generative');
       
@@ -204,7 +207,7 @@ export default function App() {
         }
         setAvailableModels(modelsArray);
       } else {
-        const url = base.endsWith('/v1') ? `${base}/models` : `${base}/v1/models`;
+        const url = `${base}/v1/models`;
         
         // Use local proxy to avoid CORS
         const res = await fetch('/api/proxy', {
@@ -217,17 +220,24 @@ export default function App() {
           })
         });
         
+        const contentType = res.headers.get('content-type');
+        const isJson = contentType && contentType.includes('application/json');
+
         if (!res.ok) {
           let errorBody = '';
-          try {
+          if (isJson) {
             const errData = await res.json();
             errorBody = errData.error?.message || errData.message || JSON.stringify(errData);
-          } catch (_) {
+          } else {
             errorBody = await res.text();
           }
-          throw new Error(errorBody ? `${res.status}: ${errorBody}` : `Endpoint returned ${res.status}: ${res.statusText}`);
+          throw new Error(errorBody ? `${res.status}: ${errorBody.slice(0, 500)}` : `Endpoint returned ${res.status}: ${res.statusText}`);
         }
         
+        if (!isJson) {
+          throw new Error('Endpoint returned success but response was not JSON. Please check your Base URL.');
+        }
+
         const data = await res.json();
         if (data && data.models) {
           setAvailableModels(data.models.map((m: any) => (m.name || '').replace('models/', '') || m.id));
@@ -576,9 +586,14 @@ export default function App() {
           })
         ];
 
-        let base = provider.baseUrl.trim().replace(/\/+$/, '');
+        let base = provider.baseUrl.trim();
+        if (!base.startsWith('http')) {
+          base = 'https://' + base;
+        }
+        base = base.replace(/\/+$/, '').replace(/\/(v1|chat|completions|models)$/g, '').replace(/\/v1$/g, '');
+
         const endpoint = isLegacyModel ? 'completions' : 'chat/completions';
-        const url = base.endsWith('/v1') ? `${base}/${endpoint}` : `${base}/v1/${endpoint}`;
+        const url = `${base}/v1/${endpoint}`;
 
         const tokenLimit = isLegacyModel ? 4096 : (model.includes('gpt-4') ? 8192 : 4096);
         let maxTokens = settings.maxOutputTokens ?? 2048;
@@ -615,9 +630,22 @@ export default function App() {
           })
         });
 
+        const contentType = res.headers.get('content-type');
+        const isJson = contentType && contentType.includes('application/json');
+
         if (!res.ok) {
-          const errData = await res.json();
-          throw new Error(errData.error?.message || errData.message || 'Failed to fetch from provider via proxy');
+          let errorBody = '';
+          if (isJson) {
+            const errData = await res.json();
+            errorBody = errData.error?.message || errData.message || JSON.stringify(errData);
+          } else {
+            errorBody = await res.text();
+          }
+          throw new Error(errorBody ? `${res.status}: ${errorBody.slice(0, 500)}` : `Failed to fetch from provider via proxy (${res.status})`);
+        }
+
+        if (!isJson) {
+          throw new Error('Endpoint returned success but response was not JSON. Please check your Base URL.');
         }
 
         const data = await res.json();

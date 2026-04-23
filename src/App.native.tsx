@@ -152,7 +152,13 @@ export default function App() {
     }
     setFetchingModels(true);
     try {
-      if (provider.baseUrl.includes('generative')) {
+      let base = provider.baseUrl.trim();
+      if (!base.startsWith('http')) {
+        base = 'https://' + base;
+      }
+      base = base.replace(/\/+$/, '').replace(/\/(v1|chat|completions|models)$/g, '').replace(/\/v1$/g, '');
+
+      if (base.includes('generative')) {
         const ai = new GoogleGenAI({ apiKey: provider.apiKey });
         const modelsResult = await ai.models.list();
         const modelsArray: string[] = [];
@@ -162,11 +168,29 @@ export default function App() {
         setAvailableModels(modelsArray);
       } else {
         // Direct fetch for OpenAI-like on mobile (CORS is less of an issue)
-        let base = provider.baseUrl.trim().replace(/\/+$/, '');
-        const url = base.endsWith('/v1') ? `${base}/models` : `${base}/v1/models`;
+        const url = `${base}/v1/models`;
         const res = await fetch(url, {
           headers: { Authorization: `Bearer ${provider.apiKey}` }
         });
+        
+        const contentType = res.headers.get('content-type');
+        const isJson = contentType && contentType.includes('application/json');
+
+        if (!res.ok) {
+          let errBody = '';
+          if (isJson) {
+            const errData = await res.json();
+            errBody = errData.error?.message || errData.message || JSON.stringify(errData);
+          } else {
+            errBody = await res.text();
+          }
+          throw new Error(errBody ? `${res.status}: ${errBody.slice(0, 200)}` : `Error ${res.status}`);
+        }
+
+        if (!isJson) {
+           throw new Error('Endpoint returned success but response was not JSON. Please check your Base URL.');
+        }
+
         const data = await res.json();
         if (data.data) {
           setAvailableModels(data.data.map((m: any) => m.id));
@@ -384,9 +408,14 @@ export default function App() {
 
         const messages = currentSession.messages.map(m => ({ role: m.role, content: m.content }));
 
-        let base = provider.baseUrl.trim().replace(/\/+$/, '');
         const endpoint = isLegacyModel ? 'completions' : 'chat/completions';
-        const url = base.endsWith('/v1') ? `${base}/${endpoint}` : `${base}/v1/${endpoint}`;
+        let base = provider.baseUrl.trim();
+        if (!base.startsWith('http')) {
+           base = 'https://' + base;
+        }
+        base = base.replace(/\/+$/, '').replace(/\/(v1|chat|completions|models)$/g, '').replace(/\/v1$/g, '');
+        
+        const url = `${base}/v1/${endpoint}`;
 
         const tokenLimit = isLegacyModel ? 4096 : (model.includes('gpt-4') ? 8192 : 4096);
         let maxTokens = settings.maxOutputTokens || 2048;
@@ -418,9 +447,22 @@ export default function App() {
           body: JSON.stringify(requestBody)
         });
 
+        const contentType = res.headers.get('content-type');
+        const isJson = contentType && contentType.includes('application/json');
+
         if (!res.ok) {
-          const errData = await res.json();
-          throw new Error(errData.error?.message || errData.message || 'Failed to fetch from OpenAI');
+          let errBody = '';
+          if (isJson) {
+            const errData = await res.json();
+            errBody = errData.error?.message || errData.message || JSON.stringify(errData);
+          } else {
+            errBody = await res.text();
+          }
+          throw new Error(errBody ? `${res.status}: ${errBody.slice(0, 200)}` : `Failed to fetch from OpenAI (${res.status})`);
+        }
+
+        if (!isJson) {
+          throw new Error('Endpoint returned success but response was not JSON. Please check your Base URL.');
         }
 
         const data = await res.json();
