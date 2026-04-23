@@ -49,6 +49,30 @@ const generateId = () => {
   }
 };
 
+// --- Helpers ---
+const cleanBaseUrl = (url: string) => {
+  let u = url.trim().replace(/\/+$/, '');
+  if (!u.startsWith('http')) u = 'https://' + u;
+  const suffixes = ['/v1', '/v1beta', '/v1beta1', '/v1beta2', '/chat', '/completions', '/models', '/openai'];
+  let changed = true;
+  while (changed) {
+    changed = false;
+    for (const suffix of suffixes) {
+      if (u.endsWith(suffix)) {
+        u = u.substring(0, u.length - suffix.length);
+        changed = true;
+      }
+    }
+    u = u.replace(/\/+$/, '');
+  }
+  return u;
+};
+
+const isGeminiUrl = (url: string) => {
+  const cleaned = cleanBaseUrl(url);
+  return cleaned.includes('generative') || cleaned.includes('googleapis.com');
+};
+
 export default function App() {
   // --- State ---
   const [sessions, setSessions] = useState<ChatSession[]>([]);
@@ -58,7 +82,6 @@ export default function App() {
   const [error, setError] = useState<string | null>(null);
   const [showSettings, setShowSettings] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(true);
-  const [editingProviderId, setEditingProviderId] = useState<string | null>(null);
   const [isDragging, setIsDragging] = useState(false);
   const [attachments, setAttachments] = useState<any[]>([]);
   const [showParamMenu, setShowParamMenu] = useState(false);
@@ -68,34 +91,77 @@ export default function App() {
   const fileInputRef = useRef<HTMLInputElement>(null);
   
   const [settings, setSettings] = useState<AppSettings>(() => {
-    const saved = localStorage.getItem('droidai_settings');
+    const saved = localStorage.getItem('iluv_settings');
     if (saved) {
       const parsed = JSON.parse(saved);
-      // Migration and sanitization
-      return {
-        apiKey: parsed.apiKey || (parsed.providers?.[0]?.apiKey) || '',
-        baseUrl: parsed.baseUrl || (parsed.providers?.[0]?.baseUrl) || DEFAULT_BASE_URL,
-        model: parsed.model || DEFAULT_MODEL,
-        temperature: parsed.temperature || 0.7,
-        maxOutputTokens: parsed.maxOutputTokens || 2048,
-        ...parsed
-      };
+      // Migration for old settings
+      if (!parsed.providers) {
+        return {
+          providers: [
+            {
+              id: generateId(),
+              name: 'Google AI',
+              apiKey: parsed.apiKey || '',
+              baseUrl: parsed.baseUrl || DEFAULT_BASE_URL,
+              enabled: true
+            },
+            {
+              id: generateId(),
+              name: 'OpenAI',
+              apiKey: '',
+              baseUrl: 'https://api.openai.com',
+              enabled: true
+            }
+          ],
+          activeProviderId: undefined,
+          model: parsed.model || DEFAULT_MODEL,
+          theme: 'system',
+          maxOutputTokens: parsed.maxOutputTokens || 2048
+        };
+      }
+      return parsed;
     }
     return {
-      apiKey: '',
-      baseUrl: DEFAULT_BASE_URL,
+      providers: [
+        {
+          id: generateId(),
+          name: 'Google AI',
+          apiKey: '',
+          baseUrl: DEFAULT_BASE_URL,
+          enabled: true
+        },
+        {
+          id: generateId(),
+          name: 'OpenAI',
+          apiKey: '',
+          baseUrl: 'https://api.openai.com',
+          enabled: true
+        }
+      ],
+      activeProviderId: undefined,
       model: DEFAULT_MODEL,
-      temperature: 0.7,
+      theme: 'system',
       maxOutputTokens: 2048
     };
   });
+
+  const getActiveProvider = () => {
+    if (settings.activeProviderId) {
+      return settings.providers.find(p => p.id === settings.activeProviderId);
+    }
+    // Fallback search by model name or just first one
+    if (settings.model.includes('gpt')) {
+      return settings.providers.find(p => p.name.toLowerCase().includes('openai'));
+    }
+    return settings.providers.find(p => p.name.toLowerCase().includes('google')) || settings.providers[0];
+  };
 
   const scrollRef = useRef<HTMLDivElement>(null);
 
   // --- Effects ---
   useEffect(() => {
     // Load sessions from localStorage
-    const savedSessions = localStorage.getItem('droidai_sessions');
+    const savedSessions = localStorage.getItem('iluv_sessions');
     if (savedSessions) {
       const parsed = JSON.parse(savedSessions);
       setSessions(parsed);
@@ -115,14 +181,14 @@ export default function App() {
 
   useEffect(() => {
     try {
-      localStorage.setItem('droidai_sessions', JSON.stringify(sessions));
+      localStorage.setItem('iluv_sessions', JSON.stringify(sessions));
     } catch (err) {
       console.warn('LocalStorage Quota Exceeded', err);
     }
   }, [sessions]);
 
   useEffect(() => {
-    localStorage.setItem('droidai_settings', JSON.stringify(settings));
+    localStorage.setItem('iluv_settings', JSON.stringify(settings));
     
     // Enforce dark mode
     const root = window.document.documentElement;
@@ -135,43 +201,22 @@ export default function App() {
     }
   }, [sessions, activeSessionId, loadingSessions]);
 
-    // ─── FIX: constructUrl now auto-injects /v1 safely ───────────────────
-  const constructUrl = (baseUrl: string, suffix: string) => {
-    let base = baseUrl.trim().replace(/\/+$/, '');
-    const cleanSuffix = suffix.replace(/^\//, '');
-
-    // If the base URL already ends with the full endpoint path, return as-is
-    if (base.endsWith(cleanSuffix)) {
-      return base;
-    }
-
-    // Auto-inject /v1 if no version segment (v1, v2, v1beta) exists
-    // Only inject if we are missing a version segment AND not already containing the target suffix
-    const hasVersion = /\/v\d+([a-z0-9]*)?($|\/)/.test(base);
-    if (!hasVersion && !base.includes(cleanSuffix)) {
-      base = `${base}/v1`;
-    }
-
-    const endpoint = suffix.startsWith('/') ? suffix : `/${suffix}`;
-    return `${base}${endpoint}`;
-  };
-  // ───────────────────────────────────────────────────────────────────────────
-
   const fetchModels = async (silent = false) => {
-    if (fetchingModels) return;
-    
-    if (!settings.apiKey) {
-      if (!silent) setError("Provide an API key in settings before syncing.");
+    const provider = getActiveProvider();
+    if (!provider || !provider.apiKey) {
+      if (!silent) setError("Provide an API key for the active provider before syncing.");
       return;
     }
     setFetchingModels(true);
     try {
-      const isGemini = settings.baseUrl.includes('generative');
+      const base = cleanBaseUrl(provider.baseUrl);
+      const isGemini = isGeminiUrl(base);
       
       if (isGemini) {
         const ai = new GoogleGenAI({ 
-          apiKey: settings.apiKey,
-          httpOptions: settings.baseUrl !== DEFAULT_BASE_URL ? { baseUrl: settings.baseUrl } : undefined
+          apiKey: provider.apiKey,
+          // Only pass httpOptions if it's NOT the standard base, and ensure it's cleaned
+          httpOptions: base !== cleanBaseUrl(DEFAULT_BASE_URL) ? { baseUrl: base } : undefined
         });
         const modelsResult = await ai.models.list();
         const modelsArray: string[] = [];
@@ -180,15 +225,16 @@ export default function App() {
         }
         setAvailableModels(modelsArray);
       } else {
-        const url = constructUrl(settings.baseUrl, 'models');
+        const url = `${base}/v1/models`;
         
-        const res = await fetch('p', {
+        // Use local proxy to avoid CORS
+        const res = await fetch('/api/proxy', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             url: url,
             method: 'GET',
-            headers: { 'Authorization': `Bearer ${settings.apiKey}` }
+            headers: { 'Authorization': `Bearer ${provider.apiKey}` }
           })
         });
         
@@ -203,27 +249,7 @@ export default function App() {
           } else {
             errorBody = await res.text();
           }
-          // ─── FIX: smarter hint on 404 ───────────────────────────────────
-          let hint = '';
-          if (res.status === 404) {
-             const base = settings.baseUrl.replace(/\/+$/, '');
-             if (!base.includes('/v1') && !base.includes('/v2')) {
-                hint = ` — Your Base URL might be missing /v1. Try adding /v1 to the end.`;
-             } else {
-                hint = ` — Model list not found. Double-check your Base URL or endpoint support.`;
-             }
-          } else if (res.status === 401) {
-             hint = ` — Invalid or missing API key.`;
-          } else if (res.status === 429) {
-             hint = ` — Too many requests. Please wait a moment before trying again.`;
-          }
-          
-          throw new Error(
-            errorBody
-              ? `${res.status}: ${errorBody.slice(0, 300)}${hint}`
-              : `Endpoint returned ${res.status}: ${res.statusText}${hint}`
-          );
-          // ────────────────────────────────────────────────────────────────
+          throw new Error(errorBody ? `${res.status}: ${errorBody.slice(0, 500)}` : `Endpoint returned ${res.status}: ${res.statusText || 'Not Found'}`);
         }
         
         if (!isJson) {
@@ -231,10 +257,13 @@ export default function App() {
         }
 
         const data = await res.json();
-        if (data && data.models) {
+        if (data && data.models && Array.isArray(data.models)) {
           setAvailableModels(data.models.map((m: any) => (m.name || '').replace('models/', '') || m.id));
-        } else if (data && data.data) {
+        } else if (data && data.data && Array.isArray(data.data)) {
           setAvailableModels(data.data.map((m: any) => m.id));
+        } else if (data && Array.isArray(data)) {
+           // Some APIs return a direct array
+           setAvailableModels(data.map((m: any) => m.id || m.name || m));
         } else {
           setAvailableModels([]);
         }
@@ -252,7 +281,8 @@ export default function App() {
   };
 
   useEffect(() => {
-     if (settings.apiKey) {
+     const provider = getActiveProvider();
+     if (provider?.apiKey) {
        fetchModels(true);
      }
   }, []);
@@ -265,7 +295,7 @@ export default function App() {
     setError(null);
     const newSession: ChatSession = {
       id: generateId(),
-      title: 'New Iluvai AI session',
+      title: 'New iluv session',
       messages: [],
       createdAt: Date.now(),
       updatedAt: Date.now()
@@ -349,6 +379,7 @@ export default function App() {
   const handleDragLeave = (e: React.DragEvent) => {
     e.preventDefault();
     e.stopPropagation();
+    // Only set to false if we're actually leaving the container
     if (e.currentTarget === e.target) {
       setIsDragging(false);
     }
@@ -383,11 +414,13 @@ export default function App() {
 
   const handleSendMessage = async () => {
     if (!input.trim() && attachments.length === 0) return;
-    if (isSessionLoading(activeSessionId) || !settings.apiKey) {
-      if (!settings.apiKey) {
-        setError('Please provide an API key in settings.');
-        setShowSettings(true);
-      }
+    if (isSessionLoading(activeSessionId)) return;
+    
+    const provider = getActiveProvider();
+
+    if (!provider || !provider.apiKey) {
+      setError('Please provide an API key for the active provider in settings.');
+      setShowSettings(true);
       return;
     }
 
@@ -415,7 +448,7 @@ export default function App() {
       if (!activeSession) {
         const newSession: ChatSession = {
           id: sessionId,
-          title: currentInput.slice(0, 30) || 'New Iluvai AI Session',
+          title: currentInput.slice(0, 30) || 'New iluv Session',
           messages: [userMessage],
           createdAt: Date.now(),
           updatedAt: Date.now()
@@ -439,9 +472,9 @@ export default function App() {
 
       const currentSession = updatedSessions.find(s => s.id === sessionId)!;
       const model = settings.model || DEFAULT_MODEL;
-      const isGemini = settings.baseUrl.includes('generative');
+      const isGemini = provider.baseUrl.includes('generative');
 
-      let sysInstruction = "You are Iluvai AI, an ultra-premium, luxury AI assistant. You speak with confidence and precision. MANDATORY: All data tables must be formatted as Github Flavored Markdown (GFM) tables. Always add a luxury spin to your responses.";
+      let sysInstruction = "You are iluv, an ultra-premium, luxury AI assistant. You speak with confidence and precision. MANDATORY: All data tables must be formatted as Github Flavored Markdown (GFM) tables. Always add a luxury spin to your responses.";
       if (settings.maxOutputTokens !== undefined && settings.maxOutputTokens > 0) {
         sysInstruction += ` IMPORTANT: You must strictly adjust and compress your entire answer to fit fully within ${settings.maxOutputTokens} tokens. Do perfectly finish your thoughts and NEVER cut off your response mid-sentence. Be concise if necessary.`;
       }
@@ -473,8 +506,8 @@ export default function App() {
 
       if (isGemini) {
         const ai = new GoogleGenAI({ 
-          apiKey: settings.apiKey,
-          httpOptions: settings.baseUrl !== DEFAULT_BASE_URL ? { baseUrl: settings.baseUrl } : undefined
+          apiKey: provider.apiKey,
+          httpOptions: provider.baseUrl !== DEFAULT_BASE_URL ? { baseUrl: provider.baseUrl } : undefined
         });
         
         const history = currentSession.messages.map(m => {
@@ -574,8 +607,9 @@ export default function App() {
           })
         ];
 
+        const base = cleanBaseUrl(provider.baseUrl);
         const endpoint = isLegacyModel ? 'completions' : 'chat/completions';
-        const url = constructUrl(settings.baseUrl, endpoint);
+        const url = `${base}/v1/${endpoint}`;
 
         const tokenLimit = isLegacyModel ? 4096 : (model.includes('gpt-4') ? 8192 : 4096);
         let maxTokens = settings.maxOutputTokens ?? 2048;
@@ -598,14 +632,14 @@ export default function App() {
           }
         }
 
-        const res = await fetch('p', {
+        const res = await fetch('/api/proxy', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             url,
             method: 'POST',
             headers: {
-              'Authorization': `Bearer ${settings.apiKey}`,
+              'Authorization': `Bearer ${provider.apiKey}`,
               'Content-Type': 'application/json'
             },
             body: requestBody
@@ -623,27 +657,7 @@ export default function App() {
           } else {
             errorBody = await res.text();
           }
-          // ─── FIX: smarter hint on 404 / 401 ────────────────────────────
-          let hint = '';
-          if (res.status === 404) {
-             const base = settings.baseUrl.replace(/\/+$/, '');
-             if (!base.includes('/v1') && !base.includes('/v2')) {
-                hint = ` — Check your Base URL. Common mistake: missing /v1 at the end (e.g. https://api.openai.com/v1).`;
-             } else {
-                hint = ` — Chat endpoint not found. Verify your Base URL supports OpenAI-compatible chat.`;
-             }
-          } else if (res.status === 401) {
-             hint = ` — Invalid or missing API key.`;
-          } else if (res.status === 429) {
-             hint = ` — Rate limit exceeded. Please wait before sending more messages.`;
-          }
-
-          throw new Error(
-            errorBody
-              ? `${res.status}: ${errorBody.slice(0, 300)}${hint}`
-              : `Failed to fetch from provider via proxy (${res.status})${hint}`
-          );
-          // ────────────────────────────────────────────────────────────────
+          throw new Error(errorBody ? `${res.status}: ${errorBody.slice(0, 500)}` : `Failed to fetch from provider via proxy (${res.status})`);
         }
 
         if (!isJson) {
@@ -714,12 +728,12 @@ export default function App() {
     const doc = new jsPDF();
     let y = 10;
     doc.setFontSize(16);
-    doc.text(`Iluvai AI Session: ${session.title}`, 10, y);
+    doc.text(`iluv Session: ${session.title}`, 10, y);
     y += 10;
     doc.setFontSize(10);
     
     session.messages.forEach(m => {
-      const rolePrefix = m.role === 'user' ? 'User: ' : 'Iluvai AI: ';
+      const rolePrefix = m.role === 'user' ? 'User: ' : 'iluv: ';
       const splitText = doc.splitTextToSize(rolePrefix + m.content, 180);
       
       if (y + splitText.length * 5 > 280) {
@@ -769,7 +783,7 @@ export default function App() {
       const a = document.createElement('a');
       a.style.display = 'none';
       a.href = url;
-      a.download = filename || `iluvai-ai-image-${Date.now()}.jpg`;
+      a.download = filename || `iluv-image-${Date.now()}.jpg`;
       document.body.appendChild(a);
       a.click();
       
@@ -808,7 +822,7 @@ export default function App() {
                 <div className="w-9 h-9 rounded-none bg-[var(--accent-app)] flex items-center justify-center text-white shadow-xl">
                   <Sparkles size={22} />
                 </div>
-                <span className="tracking-[0.2em]">ILUVAI AI</span>
+                <span className="tracking-[0.2em]">iluv</span>
               </div>
               <button 
                 onClick={() => setSidebarOpen(false)}
@@ -913,7 +927,7 @@ export default function App() {
                <Layout size={20} />
              </button>
              <h1 className="text-lg font-black tracking-[0.2em] truncate scroll-hide max-w-[200px] sm:max-w-md uppercase text-white">
-               {getActiveSession()?.title || 'ILUVAI AI'}
+               {getActiveSession()?.title || 'iluv'}
              </h1>
           </div>
           
@@ -953,7 +967,7 @@ export default function App() {
               >
                 <Sparkles size={40} />
               </motion.div>
-              <h2 className="text-4xl font-black mb-4 tracking-tighter uppercase italic text-white leading-none">Iluvai AI</h2>
+              <h2 className="text-4xl font-black mb-4 tracking-tighter uppercase italic text-white leading-none">iluv</h2>
               <p className="text-[#71717a] mb-10 font-medium tracking-wide">
                 Secure. Minimal. Elite. Your private intelligence architecture.
               </p>
@@ -1061,7 +1075,7 @@ export default function App() {
                 />
                 <div className="flex flex-col">
                   <span className="text-[10px] font-black uppercase tracking-[0.4em] text-[var(--accent-app)] mb-1">Processing</span>
-                  <span className="text-xs font-bold text-[var(--text-secondary)] italic">Iluvai AI is crafting perfection...</span>
+                  <span className="text-xs font-bold text-[var(--text-secondary)] italic">iluv is crafting perfection...</span>
                 </div>
                 <motion.div 
                   className="absolute inset-0 bg-gradient-to-r from-transparent via-[var(--accent-app)]/5 to-transparent -translate-x-full"
@@ -1079,11 +1093,11 @@ export default function App() {
           )}
         </div>
 
-        {/* Interaction Area (Input & Controls) */}
+        {/* Interraction Area (Input & Controls) */}
         <div className="relative border-t border-[#111111] bg-[#000000] p-2 sm:p-10 transition-all">
           <div className="max-w-5xl mx-auto space-y-4 sm:space-y-6">
             
-            {/* Attachment Preview */}
+            {/* Attachment Preview (Fixed Gap) */}
             <AnimatePresence>
               {attachments.length > 0 && (
                 <motion.div 
@@ -1152,7 +1166,30 @@ export default function App() {
                            ))}
                          </div>
                        </div>
-
+                       <div className="space-y-3">
+                         <div className="flex justify-between items-center mb-3 text-[10px] font-black uppercase tracking-widest text-[#71717a]">
+                           <label>Provider</label>
+                         </div>
+                         <div className="flex flex-wrap gap-2">
+                           {settings.providers.filter(p => p.enabled).map(p => (
+                             <button
+                               key={p.id}
+                               onClick={() => {
+                                 setSettings(s => ({ ...s, activeProviderId: p.id }));
+                                 // Optionally fetch models for the newly selected provider
+                                 setTimeout(() => fetchModels(true), 0);
+                               }}
+                               className={`px-3 py-1.5 rounded-lg text-[9px] font-black uppercase tracking-widest transition-all ${
+                                 (settings.activeProviderId === p.id || (!settings.activeProviderId && settings.providers[0]?.id === p.id))
+                                   ? 'bg-[#0070f3] text-white shadow-lg shadow-[#0070f3]/20'
+                                   : 'bg-[#111111] text-[#71717a] hover:text-white border border-white/5'
+                               }`}
+                             >
+                               {p.name}
+                             </button>
+                           ))}
+                         </div>
+                       </div>
                       <div>
                          <div className="flex justify-between mb-3 text-[10px] font-black uppercase tracking-widest text-[#71717a]">
                           <label>Logical Depth</label>
@@ -1233,7 +1270,7 @@ export default function App() {
             </div>
           </div>
           <div className="text-center mt-6 text-[9px] text-[#71717a] uppercase tracking-[0.7em] font-black opacity-40">
-            ILUVAI AI <span className="text-[#3b82f6]">|</span> ARCHITECT OF SECURE INTELLIGENCE
+            iluv <span className="text-[#3b82f6]">|</span> ARCHITECT OF SECURE INTELLIGENCE
           </div>
         </div>
       </div>
@@ -1267,33 +1304,116 @@ export default function App() {
 
               <div className="space-y-6 max-h-[60vh] overflow-y-auto pr-2 custom-scrollbar">
                 <div className="space-y-4">
-                  <div className="space-y-2">
-                    <label className="block text-[9px] font-black uppercase tracking-widest text-[#71717a]">Access Token</label>
-                    <input 
-                      type="password"
-                      value={settings.apiKey}
-                      onChange={(e) => setSettings(s => ({ ...s, apiKey: e.target.value }))}
-                      placeholder="API Key"
-                      className="w-full bg-slate-50 dark:bg-slate-800 border border-[var(--border-app)] rounded-none py-3 px-4 focus:outline-none focus:ring-1 focus:ring-[var(--accent-app)] transition-all font-mono text-sm"
-                    />
+                  <div className="flex items-center justify-between">
+                    <span className="text-[10px] font-black uppercase tracking-[0.4em] text-[#0070f3]">Active Intelligence Provider</span>
+                  </div>
+                  <select
+                    value={settings.activeProviderId || settings.providers[0]?.id}
+                    onChange={(e) => setSettings(s => ({ ...s, activeProviderId: e.target.value }))}
+                    className="w-full bg-slate-50 dark:bg-slate-800 border border-[var(--border-app)] rounded-none py-3 px-4 focus:outline-none focus:ring-1 focus:ring-[var(--accent-app)] transition-all font-mono text-sm text-[var(--accent-app)]"
+                  >
+                    {settings.providers.map(p => (
+                      <option key={p.id} value={p.id}>{p.name} {p.enabled ? '' : '(Disabled)'}</option>
+                    ))}
+                  </select>
+                </div>
+
+                <div className="space-y-6 pt-4 border-t border-[var(--border-app)]">
+                  <div className="flex items-center justify-between">
+                    <span className="text-[10px] font-black uppercase tracking-[0.4em] text-[#71717a]">Manage Providers</span>
+                    <button 
+                      onClick={() => {
+                        const newProvider = {
+                          id: generateId(),
+                          name: 'New Provider',
+                          apiKey: '',
+                          baseUrl: 'https://api.openai.com',
+                          enabled: true
+                        };
+                        setSettings(s => ({ ...s, providers: [...s.providers, newProvider] }));
+                      }}
+                      className="text-[var(--accent-app)] hover:underline flex items-center gap-1 text-[10px] font-black uppercase tracking-widest"
+                    >
+                      Add Provider <Plus size={10} />
+                    </button>
                   </div>
 
-                  <div className="space-y-2">
-                    <label className="block text-[9px] font-black uppercase tracking-widest text-[#71717a]">
-                      Base Endpoint URL
-                      <span className="ml-2 text-[#0070f3] normal-case font-normal">
-                        (include /v1 for OpenAI-compatible APIs)
-                      </span>
-                    </label>
-                    <input 
-                      value={settings.baseUrl}
-                      onChange={(e) => setSettings(s => ({ ...s, baseUrl: e.target.value }))}
-                      placeholder="https://api.openai.com/v1"
-                      className="w-full bg-slate-50 dark:bg-slate-800 border border-[var(--border-app)] rounded-none py-3 px-4 focus:outline-none focus:ring-1 focus:ring-[var(--accent-app)] transition-all font-mono text-sm"
-                    />
-                  </div>
+                  {settings.providers.map((provider, idx) => (
+                    <div key={provider.id} className="p-4 bg-slate-50 dark:bg-slate-800/50 border border-[var(--border-app)] space-y-4 relative group/item">
+                      <div className="flex items-center justify-between mb-2">
+                        <input 
+                          value={provider.name}
+                          onChange={(e) => {
+                            const newProviders = [...settings.providers];
+                            newProviders[idx].name = e.target.value;
+                            setSettings(s => ({ ...s, providers: newProviders }));
+                          }}
+                          className="bg-transparent border-none focus:ring-0 font-bold text-sm text-[var(--accent-app)] p-0 w-2/3"
+                        />
+                        <div className="flex items-center gap-2">
+                          <button 
+                            onClick={() => {
+                              const newProviders = [...settings.providers];
+                              newProviders[idx].enabled = !newProviders[idx].enabled;
+                              setSettings(s => ({ ...s, providers: newProviders }));
+                            }}
+                            className={`p-1.5 rounded-none border transition-colors ${provider.enabled ? 'bg-green-500/10 border-green-500/50 text-green-500' : 'bg-red-500/10 border-red-500/50 text-red-500'}`}
+                            title={provider.enabled ? 'Disable' : 'Enable'}
+                          >
+                            <Sparkles size={12} />
+                          </button>
+                          {settings.providers.length > 1 && (
+                            <button 
+                              onClick={() => {
+                                const newProviders = settings.providers.filter(p => p.id !== provider.id);
+                                setSettings(s => ({ 
+                                  ...s, 
+                                  providers: newProviders,
+                                  activeProviderId: settings.activeProviderId === provider.id ? newProviders[0].id : settings.activeProviderId
+                                }));
+                              }}
+                              className="p-1.5 bg-red-500/10 border border-red-500/50 text-red-500 rounded-none"
+                            >
+                              <Trash2 size={12} />
+                            </button>
+                          )}
+                        </div>
+                      </div>
+                      
+                      <div className="space-y-2">
+                        <label className="block text-[9px] font-black uppercase tracking-widest text-[#71717a]">Authentication Key</label>
+                        <input 
+                          type="password"
+                          value={provider.apiKey}
+                          onChange={(e) => {
+                            const newProviders = [...settings.providers];
+                            newProviders[idx].apiKey = e.target.value;
+                            setSettings(s => ({ ...s, providers: newProviders }));
+                          }}
+                          placeholder="API Key"
+                          className="w-full bg-white dark:bg-slate-900 border border-[var(--border-app)] rounded-none py-2 px-3 focus:outline-none focus:ring-1 focus:ring-[var(--accent-app)] transition-all font-mono text-xs"
+                        />
+                      </div>
 
-                  <div className="flex items-center justify-between pt-4">
+                      <div className="space-y-2">
+                        <label className="block text-[9px] font-black uppercase tracking-widest text-[#71717a]">Base Endpoint URL</label>
+                        <input 
+                          value={provider.baseUrl}
+                          onChange={(e) => {
+                            const newProviders = [...settings.providers];
+                            newProviders[idx].baseUrl = e.target.value;
+                            setSettings(s => ({ ...s, providers: newProviders }));
+                          }}
+                          placeholder="https://api.openai.com"
+                          className="w-full bg-white dark:bg-slate-900 border border-[var(--border-app)] rounded-none py-2 px-3 focus:outline-none focus:ring-1 focus:ring-[var(--accent-app)] transition-all font-mono text-[10px]"
+                        />
+                      </div>
+                    </div>
+                  ))}
+                </div>
+
+                <div className="space-y-6 pt-4 border-t border-[var(--border-app)]">
+                  <div className="flex items-center justify-between">
                     <span className="text-[10px] font-black uppercase tracking-[0.4em] text-[#71717a]">Model Designation</span>
                     <button 
                       onClick={() => fetchModels(false)}
@@ -1315,7 +1435,7 @@ export default function App() {
                       <option key={m} value={m}>{m}</option>
                     ))}
                   </select>
-                  <p className="text-[10px] text-[var(--text-secondary)] uppercase tracking-wider">Ensure your API key and Base URL are correct, then sync models.</p>
+                  <p className="text-[10px] text-[var(--text-secondary)] uppercase tracking-wider">Sync models for the active provider to populate the dropdown.</p>
                 </div>
               </div>
 

@@ -1,6 +1,6 @@
 {
-  "name": "Iluvai AI",
-  "description": "Iluvai AI - The Genesis of Intelligence. A premium, luxury, and secure AI assistant that stores everything locally. Support for custom API keys, any LLM provider, and high-end aesthetics.",
+  "name": "iluv",
+  "description": "A luxury, minimal, and secure AI assistant named iluv that stores everything locally. Support for custom API keys, any LLM provider, and high-end aesthetics.",
   "requestFramePermissions": [],
   "majorCapabilities": []
 }

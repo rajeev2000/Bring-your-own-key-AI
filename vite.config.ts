@@ -6,24 +6,24 @@ import { VitePWA } from 'vite-plugin-pwa';
 export default defineConfig(({mode}) => {
   const env = loadEnv(mode, '.', '');
   return {
-    base: '/',
+    base: './',
     plugins: [
       react(), 
       VitePWA({
         registerType: 'autoUpdate',
         manifest: {
-          name: 'Iluvai Secure AI',
-          short_name: 'Iluvai',
-          description: 'Ultra-premium secure local AI assistant',
+          name: 'iluv',
+          short_name: 'iluv',
+          description: 'iluv - Ultra-premium secure local AI assistant',
           theme_color: '#f97316',
           icons: [
             {
-              src: 'https://picsum.photos/seed/droidai/192/192',
+              src: 'https://picsum.photos/seed/iluv/192/192',
               sizes: '192x192',
               type: 'image/png'
             },
             {
-              src: 'https://picsum.photos/seed/droidai/512/512',
+              src: 'https://picsum.photos/seed/iluv/512/512',
               sizes: '512x512',
               type: 'image/png'
             }

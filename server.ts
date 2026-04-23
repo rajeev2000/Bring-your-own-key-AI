@@ -1,7 +1,7 @@
 import express from "express";
+import { createServer as createViteServer } from "vite";
 import path from "path";
 import { fileURLToPath } from "url";
-import { createServer as createViteServer } from "vite";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -12,21 +12,13 @@ async function startServer() {
 
   app.use(express.json({ limit: '50mb' }));
 
-  // Logging
-  app.use((req, res, next) => {
-    console.log(`[${new Date().toISOString()}] ${req.method} ${req.url}`);
-    next();
-  });
-
-  // Health
-  app.get("/h", (req, res) => {
-    res.json({ status: "ok", msg: "Architect Alive" });
-  });
-
-  // Proxy
-  app.post("/p", async (req, res) => {
+  // Generic proxy for LLM APIs to avoid CORS issues
+  app.post("/api/proxy", async (req, res) => {
     const { url, method, headers, body } = req.body;
-    if (!url) return res.status(400).json({ error: "No URL" });
+    
+    if (!url) {
+      return res.status(400).json({ error: "Missing URL in proxy request" });
+    }
 
     try {
       const response = await fetch(url, {
@@ -43,12 +35,13 @@ async function startServer() {
         const text = await response.text();
         return res.status(response.status).send(text);
       }
-    } catch (error) {
+    } catch (error: any) {
       console.error("Proxy error:", error);
-      return res.status(500).json({ error: error instanceof Error ? error.message : "Proxy fail" });
+      return res.status(500).json({ error: error.message || "Failed to proxy request" });
     }
   });
 
+  // Vite middleware for development
   if (process.env.NODE_ENV !== "production") {
     const vite = await createViteServer({
       server: { middlewareMode: true },
@@ -64,7 +57,7 @@ async function startServer() {
   }
 
   app.listen(PORT, "0.0.0.0", () => {
-    console.log(`Server running on http://0.0.0.0:${PORT}`);
+    console.log(`Server running on http://localhost:${PORT}`);
   });
 }
 
