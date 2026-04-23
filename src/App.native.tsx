@@ -43,7 +43,7 @@ import * as Sharing from 'expo-sharing';
 import { StatusBar } from 'expo-status-bar';
 import { styled } from 'nativewind';
 
-import { Message, ChatSession, AppSettings, DEFAULT_MODEL, DEFAULT_BASE_URL } from './types';
+import { Message, ChatSession, AppSettings, ProviderConfig, DEFAULT_MODEL, DEFAULT_BASE_URL } from './types';
 
 const StyledView = styled(View);
 const StyledText = styled(Text);
@@ -68,6 +68,7 @@ export default function App() {
   const [availableModels, setAvailableModels] = useState<string[]>([]);
   const [fetchingModels, setFetchingModels] = useState(false);
   const [showStrategy, setShowStrategy] = useState(false);
+  const [editingProviderId, setEditingProviderId] = useState<string | null>(null);
   
   const [settings, setSettings] = useState<AppSettings>({
     providers: [
@@ -144,6 +145,47 @@ export default function App() {
     AsyncStorage.setItem('prive_settings', JSON.stringify(settings));
   }, [settings]);
 
+  const addProvider = () => {
+    const newProvider: ProviderConfig = {
+      id: generateId(),
+      name: 'New Provider',
+      apiKey: '',
+      baseUrl: 'https://api.openai.com',
+      enabled: true
+    };
+    setSettings(s => ({ ...s, providers: [...s.providers, newProvider] }));
+  };
+
+  const deleteProvider = (id: string) => {
+    setSettings(s => {
+      const filtered = s.providers.filter(p => p.id !== id);
+      return { 
+        ...s, 
+        providers: filtered,
+        activeProviderId: s.activeProviderId === id ? (filtered[0]?.id || undefined) : s.activeProviderId
+      };
+    });
+  };
+
+  const constructUrl = (baseUrl: string, suffix: string) => {
+    let base = baseUrl.trim().replace(/\/+$/, '');
+    if (!base.startsWith('http')) base = 'https://' + base;
+    
+    if (base.endsWith(suffix) || base.endsWith(suffix.replace(/^\//, ''))) return base;
+    
+    if (base.includes('/v1')) {
+      if (base.endsWith('/v1')) {
+        const cleanSuffix = suffix.startsWith('/v1/') ? suffix.replace('/v1/', '/') : suffix;
+        return `${base}${cleanSuffix.startsWith('/') ? cleanSuffix : '/' + cleanSuffix}`;
+      }
+      return `${base}${suffix.startsWith('/') ? suffix : '/' + suffix}`;
+    }
+    
+    const cleanSuffix = suffix.startsWith('/') ? suffix : '/' + suffix;
+    const finalSuffix = cleanSuffix.startsWith('/v1/') ? cleanSuffix : `/v1${cleanSuffix}`;
+    return `${base}${finalSuffix}`;
+  };
+
   const fetchModels = async () => {
     const provider = getActiveProvider();
     if (!provider || !provider.apiKey) {
@@ -152,14 +194,12 @@ export default function App() {
     }
     setFetchingModels(true);
     try {
-      let base = provider.baseUrl.trim();
-      if (!base.startsWith('http')) {
-        base = 'https://' + base;
-      }
-      base = base.replace(/\/+$/, '').replace(/\/(v1|chat|completions|models)$/g, '').replace(/\/v1$/g, '');
-
-      if (base.includes('generative')) {
-        const ai = new GoogleGenAI({ apiKey: provider.apiKey });
+      const isGemini = provider.type === 'google' || (provider.type === undefined && provider.baseUrl.includes('generative'));
+      if (isGemini) {
+        const ai = new GoogleGenAI({ 
+          apiKey: provider.apiKey,
+          httpOptions: provider.baseUrl !== DEFAULT_BASE_URL ? { baseUrl: provider.baseUrl } : undefined
+        });
         const modelsResult = await ai.models.list();
         const modelsArray: string[] = [];
         for await (const m of modelsResult) {
@@ -168,7 +208,7 @@ export default function App() {
         setAvailableModels(modelsArray);
       } else {
         // Direct fetch for OpenAI-like on mobile (CORS is less of an issue)
-        const url = `${base}/v1/models`;
+        const url = constructUrl(provider.baseUrl, 'models');
         const res = await fetch(url, {
           headers: { Authorization: `Bearer ${provider.apiKey}` }
         });
@@ -209,7 +249,7 @@ export default function App() {
     setError(null);
     const newSession: ChatSession = {
       id: generateId(),
-      title: 'New Privé AI Session',
+      title: 'New Iuvai AI Session',
       messages: [],
       createdAt: Date.now(),
       updatedAt: Date.now()
@@ -304,7 +344,7 @@ export default function App() {
     setLoadingSessions(prev => new Set(prev).add(sessionId));
 
     try {
-      const isGemini = provider.baseUrl.includes('generative');
+      const isGemini = provider.type === 'google' || (provider.type === undefined && provider.baseUrl.includes('generative'));
       const currentSession = updatedSessions.find(s => s.id === sessionId)!;
       const model = settings.model || DEFAULT_MODEL;
       
@@ -409,13 +449,7 @@ export default function App() {
         const messages = currentSession.messages.map(m => ({ role: m.role, content: m.content }));
 
         const endpoint = isLegacyModel ? 'completions' : 'chat/completions';
-        let base = provider.baseUrl.trim();
-        if (!base.startsWith('http')) {
-           base = 'https://' + base;
-        }
-        base = base.replace(/\/+$/, '').replace(/\/(v1|chat|completions|models)$/g, '').replace(/\/v1$/g, '');
-        
-        const url = `${base}/v1/${endpoint}`;
+        const url = constructUrl(provider.baseUrl, endpoint);
 
         const tokenLimit = isLegacyModel ? 4096 : (model.includes('gpt-4') ? 8192 : 4096);
         let maxTokens = settings.maxOutputTokens || 2048;
@@ -524,7 +558,7 @@ export default function App() {
         <StyledTouchableOpacity onPress={() => setSidebarOpen(true)} className="p-2">
           <Layout size={22} color="#3b82f6" />
         </StyledTouchableOpacity>
-        <StyledText className="text-white font-black tracking-[0.3em] text-lg uppercase italic">Privé AI</StyledText>
+        <StyledText className="text-white font-black tracking-[0.3em] text-lg uppercase italic">Iuvai AI</StyledText>
         <StyledTouchableOpacity onPress={() => setShowSettings(true)} className="p-2">
           <Settings2 size={22} color="#3b82f6" />
         </StyledTouchableOpacity>
@@ -543,7 +577,7 @@ export default function App() {
             <StyledView className="w-24 h-24 rounded-full bg-[#0a0a0a] border border-[#3b82f6]/20 items-center justify-center shadow-2xl shadow-[#3b82f6]/10 mb-8">
               <Sparkles size={50} color="#3b82f6" />
             </StyledView>
-            <StyledText className="text-white text-4xl font-black tracking-tighter uppercase italic text-center">Privé AI</StyledText>
+            <StyledText className="text-white text-4xl font-black tracking-tighter uppercase italic text-center">Iuvai AI</StyledText>
             <StyledText className="text-[#a1a1aa] text-center mt-4 font-bold tracking-widest uppercase text-[10px]">Architect of Secure Intelligence</StyledText>
             <StyledView className="mt-12 w-full space-y-4">
               {[
@@ -802,6 +836,24 @@ export default function App() {
                          <Trash2 size={16} color="#ef4444" />
                       </StyledTouchableOpacity>
                     )}
+                  </StyledView>
+
+                  <StyledView>
+                    <StyledText className="text-[#71717a] font-bold uppercase text-[8px] tracking-widest mb-2">Type</StyledText>
+                    <StyledView className="bg-black/50 border border-[#222] rounded-lg overflow-hidden mb-3">
+                      <Picker
+                        selectedValue={provider.type || (provider.baseUrl.includes('generative') ? 'google' : 'openai')}
+                        onValueChange={(val) => {
+                          const newP = [...settings.providers];
+                          newP[providerIdx].type = val;
+                          setSettings(s => ({ ...s, providers: newP }));
+                        }}
+                        style={{ color: 'white', height: 50 }}
+                      >
+                        <Picker.Item label="OpenAI Compatible" value="openai" />
+                        <Picker.Item label="Google AI" value="google" />
+                      </Picker>
+                    </StyledView>
                   </StyledView>
 
                   <StyledView>

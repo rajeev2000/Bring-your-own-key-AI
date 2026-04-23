@@ -32,6 +32,7 @@ export interface ProviderConfig {
   apiKey: string;
   baseUrl: string;
   enabled: boolean;
+  type?: 'openai' | 'google';
 }
 
 export interface AppSettings {

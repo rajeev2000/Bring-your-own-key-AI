@@ -5,6 +5,7 @@
   "type": "module",
   "main": "index.js",
   "scripts": {
+    "start": "node server.ts",
     "dev": "tsx server.ts",
     "build": "vite build",
     "preview": "vite preview",
