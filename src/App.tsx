@@ -88,6 +88,8 @@ export default function App() {
   const [showStrategy, setShowStrategy] = useState(false);
   const [availableModels, setAvailableModels] = useState<string[]>([]);
   const [fetchingModels, setFetchingModels] = useState(false);
+  const [showSyncConfirm, setShowSyncConfirm] = useState(false);
+  const [deferredPrompt, setDeferredPrompt] = useState<any>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   
   const [settings, setSettings] = useState<AppSettings>(() => {
@@ -159,6 +161,19 @@ export default function App() {
   const scrollRef = useRef<HTMLDivElement>(null);
 
   // --- Effects ---
+  useEffect(() => {
+    const handleBeforeInstallPrompt = (e: Event) => {
+      e.preventDefault();
+      setDeferredPrompt(e);
+    };
+
+    window.addEventListener('beforeinstallprompt', handleBeforeInstallPrompt);
+
+    return () => {
+      window.removeEventListener('beforeinstallprompt', handleBeforeInstallPrompt);
+    };
+  }, []);
+
   useEffect(() => {
     // Load sessions from localStorage
     const savedSessions = localStorage.getItem('iluv_sessions');
@@ -871,12 +886,38 @@ export default function App() {
               ))}
             </div>
 
-            <div className="p-4 border-t border-[var(--border-app)] flex items-center justify-between">
+            <div className="p-4 border-t border-[var(--border-app)] flex flex-col gap-2 relative">
+              <AnimatePresence>
+                {deferredPrompt && (
+                  <motion.div
+                    initial={{ opacity: 0, height: 0, marginBottom: 0 }}
+                    animate={{ opacity: 1, height: 'auto', marginBottom: 8 }}
+                    exit={{ opacity: 0, height: 0, marginBottom: 0 }}
+                    className="w-full"
+                  >
+                    <button 
+                      onClick={() => {
+                        if (!deferredPrompt) return;
+                        deferredPrompt.prompt();
+                        deferredPrompt.userChoice.then((choiceResult: any) => {
+                          if (choiceResult.outcome === 'accepted') {
+                            setDeferredPrompt(null);
+                          }
+                        });
+                      }}
+                      className="flex items-center justify-center gap-2 p-2.5 rounded-none bg-[var(--accent-app)] text-white hover:bg-[var(--accent-app)]/90 transition-colors text-[11px] font-black uppercase tracking-widest w-full shadow-lg"
+                    >
+                      <Download size={16} />
+                      <span>Install App</span>
+                    </button>
+                  </motion.div>
+                )}
+              </AnimatePresence>
               <button 
                 onClick={() => setShowSettings(true)}
-                className="flex items-center gap-2 p-2 rounded-none hover:bg-slate-200 dark:hover:bg-slate-800 transition-colors text-xs font-black uppercase tracking-widest text-[var(--text-app)] w-full"
+                className="flex items-center justify-center gap-2 p-2.5 rounded-none hover:bg-slate-200 dark:hover:bg-slate-800 transition-colors text-[11px] font-black uppercase tracking-widest text-[var(--text-app)] w-full"
               >
-                <Settings size={18} />
+                <Settings size={16} />
                 <span>Preferences</span>
               </button>
             </div>
@@ -1416,13 +1457,49 @@ export default function App() {
                   <div className="flex items-center justify-between">
                     <span className="text-[10px] font-black uppercase tracking-[0.4em] text-[#71717a]">Model Designation</span>
                     <button 
-                      onClick={() => fetchModels(false)}
+                      onClick={() => setShowSyncConfirm(true)}
                       disabled={fetchingModels}
                       className="text-[var(--accent-app)] hover:underline flex items-center gap-1 text-[10px] font-black uppercase tracking-widest disabled:opacity-50"
                     >
                       {fetchingModels ? 'Syncing...' : 'Sync Models'} <RefreshCw size={10} className={fetchingModels ? 'animate-spin' : ''} />
                     </button>
                   </div>
+
+                  <AnimatePresence>
+                    {showSyncConfirm && (
+                      <motion.div 
+                        initial={{ opacity: 0, height: 0 }}
+                        animate={{ opacity: 1, height: 'auto' }}
+                        exit={{ opacity: 0, height: 0 }}
+                        className="overflow-hidden mb-4"
+                      >
+                        <div className="bg-slate-100 dark:bg-slate-900 border border-[var(--accent-app)]/30 p-4 space-y-3">
+                          <p className="text-[10px] font-bold uppercase tracking-widest text-[var(--accent-app)]">Initiate model synchronization?</p>
+                          <p className="text-[9px] text-[var(--text-secondary)] uppercase tracking-wide leading-relaxed">
+                            This will query the provider's endpoint to retrieve available intelligence models. Ensure your API key is correctly configured.
+                          </p>
+                          <div className="flex gap-2 pt-2">
+                            <button 
+                              onClick={() => {
+                                setShowSyncConfirm(false);
+                                fetchModels(false);
+                              }}
+                              className="bg-[var(--accent-app)] text-white text-[9px] font-black uppercase tracking-widest py-2 px-4"
+                            >
+                              Confirm
+                            </button>
+                            <button 
+                              onClick={() => setShowSyncConfirm(false)}
+                              className="bg-transparent border border-[var(--border-app)] text-[var(--text-secondary)] text-[9px] font-black uppercase tracking-widest py-2 px-4 hover:bg-slate-200 dark:hover:bg-slate-800"
+                            >
+                              Cancel
+                            </button>
+                          </div>
+                        </div>
+                      </motion.div>
+                    )}
+                  </AnimatePresence>
+
                   <select
                     value={settings.model}
                     onChange={(e) => setSettings(s => ({ ...s, model: e.target.value }))}

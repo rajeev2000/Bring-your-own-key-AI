@@ -67,6 +67,7 @@ export default function App() {
   const [attachments, setAttachments] = useState<any[]>([]);
   const [availableModels, setAvailableModels] = useState<string[]>([]);
   const [fetchingModels, setFetchingModels] = useState(false);
+  const [showSyncConfirm, setShowSyncConfirm] = useState(false);
   const [showStrategy, setShowStrategy] = useState(false);
   
   const [settings, setSettings] = useState<AppSettings>({
