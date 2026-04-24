@@ -73,6 +73,35 @@ const isGeminiUrl = (url: string) => {
   return cleaned.includes('generative') || cleaned.includes('googleapis.com');
 };
 
+const PREDEFINED_MODELS: Record<string, { id: string; label: string; category: string }[]> = {
+  gemini: [
+    { id: 'gemini-3.1-pro', label: 'Gemini 3.1 Pro', category: 'Pro Models' },
+    { id: 'gemini-3.0-pro', label: 'Gemini 3.0 Pro', category: 'Pro Models' },
+    { id: 'gemini-2.0-pro', label: 'Gemini 2.0 Pro', category: 'Pro Models' },
+    { id: 'gemini-3.1-flash', label: 'Gemini 3.1 Flash', category: 'Thinking Models' },
+    { id: 'gemini-3.0-flash', label: 'Gemini 3.0 Flash', category: 'Thinking Models' },
+    { id: 'gemini-2.0-flash', label: 'Gemini 2.0 Flash', category: 'Thinking Models' },
+    { id: 'gemini-3.1-flash-lite', label: 'Gemini 3.1 Flash Lite', category: 'Fast Models' },
+    { id: 'gemini-3.0-flash-lite', label: 'Gemini 3.0 Flash Lite', category: 'Fast Models' },
+    { id: 'gemini-2.0-flash-lite', label: 'Gemini 2.0 Flash Lite', category: 'Fast Models' },
+    { id: 'nana-banana', label: 'Nana Banana', category: 'Image Generation' },
+    { id: 'imagen-3.0-generate-001', label: 'Imagen 3.0', category: 'Image Generation' },
+    { id: 'imagen-2.0', label: 'Imagen 2.0', category: 'Image Generation' },
+  ],
+  openai: [
+    { id: 'gpt-4.5', label: 'GPT-4.5', category: 'Pro Models' },
+    { id: 'gpt-4o', label: 'GPT-4o', category: 'Pro Models' },
+    { id: 'gpt-4-turbo', label: 'GPT-4 Turbo', category: 'Pro Models' },
+    { id: 'o1', label: 'o1', category: 'Thinking Models' },
+    { id: 'o3-mini', label: 'o3-mini', category: 'Thinking Models' },
+    { id: 'o1-mini', label: 'o1-mini', category: 'Thinking Models' },
+    { id: 'gpt-4o-mini', label: 'GPT-4o-Mini', category: 'Fast Models' },
+    { id: 'gpt-3.5-turbo', label: 'GPT-3.5 Turbo', category: 'Fast Models' },
+    { id: 'dall-e-3', label: 'DALL-E 3', category: 'Image Generation' },
+    { id: 'dall-e-2', label: 'DALL-E 2', category: 'Image Generation' },
+  ]
+};
+
 export default function App() {
   // --- State ---
   const [sessions, setSessions] = useState<ChatSession[]>([]);
@@ -86,9 +115,6 @@ export default function App() {
   const [attachments, setAttachments] = useState<any[]>([]);
   const [showParamMenu, setShowParamMenu] = useState(false);
   const [showStrategy, setShowStrategy] = useState(false);
-  const [availableModels, setAvailableModels] = useState<string[]>([]);
-  const [fetchingModels, setFetchingModels] = useState(false);
-  const [showSyncConfirm, setShowSyncConfirm] = useState(false);
   const [deferredPrompt, setDeferredPrompt] = useState<any>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   
@@ -135,7 +161,7 @@ export default function App() {
           enabled: true
         }
       ],
-      activeProviderId: undefined,
+      activeProviderId: 'gemini',
       model: DEFAULT_MODEL,
       theme: 'system',
       maxOutputTokens: 2048
@@ -211,88 +237,7 @@ export default function App() {
     }
   }, [sessions, activeSessionId, loadingSessions]);
 
-  const fetchModels = async (silent = false) => {
-    const provider = getActiveProvider();
-    if (!provider || !provider.apiKey) {
-      if (!silent) setError("Provide an API key for the active provider before syncing.");
-      return;
-    }
-    setFetchingModels(true);
-    try {
-      const base = cleanBaseUrl(provider.baseUrl);
-      const isGemini = isGeminiUrl(base);
-      
-      if (isGemini) {
-        const ai = new GoogleGenAI({ 
-          apiKey: provider.apiKey,
-          // Only pass httpOptions if it's NOT the standard base, and ensure it's cleaned
-          httpOptions: base !== cleanBaseUrl(DEFAULT_BASE_URL) ? { baseUrl: base } : undefined
-        });
-        const modelsResult = await ai.models.list();
-        const modelsArray: string[] = [];
-        for await (const m of modelsResult) {
-          modelsArray.push((m.name || '').replace('models/', ''));
-        }
-        setAvailableModels(modelsArray);
-      } else {
-        const url = `${base}/v1/models`;
-        
-        const res = await fetch(url, {
-          method: 'GET',
-          headers: { 
-            'Content-Type': 'application/json',
-            'Authorization': `Bearer ${provider.apiKey}` 
-          }
-        });
-        
-        const contentType = res.headers.get('content-type');
-        const isJson = contentType && contentType.includes('application/json');
 
-        if (!res.ok) {
-          let errorBody = '';
-          if (isJson) {
-            const errData = await res.json();
-            errorBody = errData.error?.message || errData.message || JSON.stringify(errData);
-          } else {
-            errorBody = await res.text();
-          }
-          throw new Error(errorBody ? `${res.status}: ${errorBody.slice(0, 500)}` : `Endpoint returned ${res.status}: ${res.statusText || 'Not Found'}`);
-        }
-        
-        if (!isJson) {
-          throw new Error('Endpoint returned success but response was not JSON. Please check your Base URL.');
-        }
-
-        const data = await res.json();
-        if (data && data.models && Array.isArray(data.models)) {
-          setAvailableModels(data.models.map((m: any) => (m.name || '').replace('models/', '') || m.id));
-        } else if (data && data.data && Array.isArray(data.data)) {
-          setAvailableModels(data.data.map((m: any) => m.id));
-        } else if (data && Array.isArray(data)) {
-           // Some APIs return a direct array
-           setAvailableModels(data.map((m: any) => m.id || m.name || m));
-        } else {
-          setAvailableModels([]);
-        }
-      }
-    } catch (e: any) {
-      console.error("Failed to fetch models", e);
-      setAvailableModels([]);
-      if (!silent) {
-        setError(`Model sync failed: ${e.message}`);
-        setTimeout(() => setError(null), 5000);
-      }
-    } finally {
-      setFetchingModels(false);
-    }
-  };
-
-  useEffect(() => {
-     const provider = getActiveProvider();
-     if (provider?.apiKey) {
-       fetchModels(true);
-     }
-  }, []);
 
   // --- Helpers ---
   const getActiveSession = () => sessions.find(s => s.id === activeSessionId);
@@ -517,55 +462,31 @@ export default function App() {
           httpOptions: provider.baseUrl !== DEFAULT_BASE_URL ? { baseUrl: provider.baseUrl } : undefined
         });
         
-        const history = currentSession.messages.map(m => {
-          const parts: any[] = [{ text: m.content || '' }];
-          if (m.attachments) {
-            m.attachments.forEach(att => {
-              if (att.isText) {
-                parts.push({ text: `\n[FILE: ${att.name}]\n${att.content}\n[END FILE]` });
-              } else {
-                parts.push({
-                  inlineData: {
-                    data: att.data,
-                    mimeType: att.type
-                  }
-                });
-              }
-            });
-          }
-          return {
-            role: m.role === 'assistant' ? 'model' : m.role,
-            parts
-          };
-        });
+        const isImagen = model.toLowerCase().includes('imagen') || model.toLowerCase().includes('nana');
 
-        const configOpts: any = {
-          systemInstruction: sysInstruction
-        };
-        if (settings.temperature !== undefined) configOpts.temperature = Number(settings.temperature);
-        if (settings.maxOutputTokens !== undefined) configOpts.maxOutputTokens = Number(settings.maxOutputTokens);
-
-        const responseStream = await ai.models.generateContentStream({
-          model: model,
-          contents: history,
-          config: configOpts
-        });
-
-        for await (const chunk of responseStream) {
-          fullText += (chunk.text || '');
-          if (chunk.usageMetadata) finalTokens = chunk.usageMetadata.candidatesTokenCount || 0;
+        if (isImagen) {
+          const promptMsg = currentSession.messages[currentSession.messages.length - 1].content || 'A beautiful image';
+          const response = await ai.models.generateImages({
+            model: model,
+            prompt: promptMsg,
+            config: {
+              numberOfImages: 1,
+              outputMimeType: 'image/jpeg',
+              aspectRatio: '1:1',
+            },
+          });
           
-          if (chunk.candidates?.[0]?.content?.parts) {
-            chunk.candidates[0].content.parts.forEach(p => {
-              if (p.inlineData?.data) {
-                generatedAttachments.push({
-                   name: `generated_${Date.now()}.png`,
-                   type: p.inlineData.mimeType || 'image/png',
-                   data: p.inlineData.data,
-                   isText: false
-                });
-              }
+          if (response.generatedImages && response.generatedImages[0]) {
+            const base64EncodeString = response.generatedImages[0].image.imageBytes;
+            generatedAttachments.push({
+               name: `imagen_${Date.now()}.jpeg`,
+               type: 'image/jpeg',
+               data: base64EncodeString,
+               isText: false
             });
+            fullText = "Here is the generated image.";
+          } else {
+            fullText = "Failed to generate image.";
           }
 
           setSessions(prev => prev.map(s => {
@@ -583,6 +504,74 @@ export default function App() {
             }
             return s;
           }));
+        } else {
+          const history = currentSession.messages.map(m => {
+            const parts: any[] = [{ text: m.content || '' }];
+            if (m.attachments) {
+              m.attachments.forEach(att => {
+                if (att.isText) {
+                  parts.push({ text: `\n[FILE: ${att.name}]\n${att.content}\n[END FILE]` });
+                } else {
+                  parts.push({
+                    inlineData: {
+                      data: att.data,
+                      mimeType: att.type
+                    }
+                  });
+                }
+              });
+            }
+            return {
+              role: m.role === 'assistant' ? 'model' : m.role,
+              parts
+            };
+          });
+
+          const configOpts: any = {
+            systemInstruction: sysInstruction
+          };
+          if (settings.temperature !== undefined) configOpts.temperature = Number(settings.temperature);
+          if (settings.maxOutputTokens !== undefined) configOpts.maxOutputTokens = Number(settings.maxOutputTokens);
+
+          const responseStream = await ai.models.generateContentStream({
+            model: model,
+            contents: history,
+            config: configOpts
+          });
+
+          for await (const chunk of responseStream) {
+            fullText += (chunk.text || '');
+            if (chunk.usageMetadata) finalTokens = chunk.usageMetadata.candidatesTokenCount || 0;
+            
+            if (chunk.candidates?.[0]?.content?.parts) {
+              chunk.candidates[0].content.parts.forEach(p => {
+                if (p.inlineData?.data) {
+                  generatedAttachments.push({
+                     name: `generated_${Date.now()}.png`,
+                     type: p.inlineData.mimeType || 'image/png',
+                     data: p.inlineData.data,
+                     isText: false
+                  });
+                }
+              });
+            }
+
+            setSessions(prev => prev.map(s => {
+              if (s.id === sessionId) {
+                return {
+                  ...s,
+                  messages: s.messages.map(m => m.id === assistantMessageId ? { 
+                    ...m, 
+                    content: fullText,
+                    modelUsed: model,
+                    attachments: generatedAttachments.length > 0 ? generatedAttachments : undefined
+                  } : m),
+                  updatedAt: Date.now()
+                };
+              }
+              return s;
+            }));
+          }
         }
       } else {
         // OpenAI-compatible via Proxy
@@ -596,6 +585,8 @@ export default function App() {
                           model.toLowerCase().startsWith('o3') || 
                           model.toLowerCase().includes('reasoning') ||
                           model.toLowerCase().includes('latest');
+
+        const isImageModel = model.toLowerCase().includes('dall-e');
 
         const messages = [
           { role: 'system', content: sysInstruction },
@@ -615,7 +606,7 @@ export default function App() {
         ];
 
         const base = cleanBaseUrl(provider.baseUrl);
-        const endpoint = isLegacyModel ? 'completions' : 'chat/completions';
+        const endpoint = isImageModel ? 'images/generations' : (isLegacyModel ? 'completions' : 'chat/completions');
         const url = `${base}/v1/${endpoint}`;
 
         const tokenLimit = isLegacyModel ? 4096 : (model.includes('gpt-4') ? 8192 : 4096);
@@ -623,11 +614,19 @@ export default function App() {
         if (maxTokens > tokenLimit) maxTokens = tokenLimit;
 
         const requestBody: any = {
-          model,
-          temperature: isO1Model ? 1 : (settings.temperature ?? 0.7)
+          model
         };
+        
+        if (!isImageModel) {
+          requestBody.temperature = isO1Model ? 1 : (settings.temperature ?? 0.7);
+        }
 
-        if (isLegacyModel) {
+        if (isImageModel) {
+          requestBody.prompt = currentSession.messages[currentSession.messages.length - 1].content || 'A beautiful image';
+          requestBody.n = 1;
+          requestBody.size = "1024x1024";
+          requestBody.response_format = "b64_json";
+        } else if (isLegacyModel) {
           requestBody.prompt = messages.map(m => `${m.role === 'system' ? 'Instruction' : m.role.charAt(0).toUpperCase() + m.role.slice(1)}: ${m.content}`).join('\n') + '\nAssistant: ';
           requestBody.max_tokens = maxTokens;
         } else {
@@ -667,7 +666,20 @@ export default function App() {
         }
 
         const data = await res.json();
-        if (isLegacyModel) {
+        
+        if (isImageModel) {
+          if (data.data && data.data[0] && data.data[0].b64_json) {
+            generatedAttachments.push({
+               name: `dalle_${Date.now()}.png`,
+               type: 'image/png',
+               data: data.data[0].b64_json,
+               isText: false
+            });
+            fullText = "Here is the generated image.";
+          } else {
+            fullText = "Failed to extract image from response.";
+          }
+        } else if (isLegacyModel) {
           fullText = data.choices?.[0]?.text || '';
           finalTokens = data.usage?.completion_tokens || 0;
         } else {
@@ -682,7 +694,8 @@ export default function App() {
               messages: s.messages.map(m => m.id === assistantMessageId ? { 
                 ...m, 
                 content: fullText,
-                isStreaming: false
+                isStreaming: false,
+                attachments: generatedAttachments.length > 0 ? generatedAttachments : undefined
               } : m),
               updatedAt: Date.now()
             };
@@ -1175,22 +1188,26 @@ export default function App() {
                        <div className="space-y-3">
                          <div className="flex justify-between items-center mb-3 text-[10px] font-black uppercase tracking-widest text-[#71717a]">
                            <label>Model</label>
-                           <button onClick={(e) => { e.preventDefault(); fetchModels(); }} className="text-[#0070f3] hover:text-white transition-colors" title="Sync Models">
-                             <RefreshCw size={12} className={fetchingModels ? 'animate-spin' : ''} />
-                           </button>
                          </div>
-                         <div className="max-h-40 overflow-y-auto custom-scrollbar pr-2 space-y-1">
-                           {(availableModels.length > 0 ? availableModels : [settings.model || DEFAULT_MODEL]).map(m => (
-                             <button
-                               key={m}
-                               onClick={() => {
-                                 setSettings(s => ({ ...s, model: m }));
-                                 setShowParamMenu(false);
-                               }}
-                               className={`w-full text-left px-3 py-2 rounded-lg text-[11px] font-bold uppercase tracking-[0.1em] transition-colors ${settings.model === m ? 'bg-[#0070f3]/10 text-[#0070f3]' : 'text-white hover:bg-[#111111]'}`}
-                             >
-                               {m}
-                             </button>
+                         <div className="max-h-40 overflow-y-auto custom-scrollbar pr-2 space-y-3">
+                           {Array.from(new Set(PREDEFINED_MODELS[settings.activeProviderId || '']?.map(m => m.category) || [])).map(category => (
+                             <div key={category}>
+                               <div className="text-[9px] uppercase tracking-widest text-[#71717a] font-bold mb-1 pl-2">{category}</div>
+                               <div className="space-y-1">
+                                 {PREDEFINED_MODELS[settings.activeProviderId || ''].filter(m => m.category === category).map(m => (
+                                   <button
+                                     key={m.id}
+                                     onClick={() => {
+                                       setSettings(s => ({ ...s, model: m.id }));
+                                       setShowParamMenu(false);
+                                     }}
+                                     className={`w-full text-left px-3 py-2 rounded-lg text-[11px] font-bold uppercase tracking-[0.1em] transition-colors ${settings.model === m.id ? 'bg-[#0070f3]/10 text-[#0070f3]' : 'text-white hover:bg-[#111111]'}`}
+                                   >
+                                     {m.label}
+                                   </button>
+                                 ))}
+                               </div>
+                             </div>
                            ))}
                          </div>
                        </div>
@@ -1204,8 +1221,6 @@ export default function App() {
                                key={p.id}
                                onClick={() => {
                                  setSettings(s => ({ ...s, activeProviderId: p.id }));
-                                 // Optionally fetch models for the newly selected provider
-                                 setTimeout(() => fetchModels(true), 0);
                                }}
                                className={`px-3 py-1.5 rounded-lg text-[9px] font-black uppercase tracking-widest transition-all ${
                                  (settings.activeProviderId === p.id || (!settings.activeProviderId && settings.providers[0]?.id === p.id))
@@ -1397,64 +1412,25 @@ export default function App() {
 
                 <div className="space-y-6 pt-4 border-t border-[var(--border-app)]">
                   <div className="flex items-center justify-between">
-                    <span className="text-[10px] font-black uppercase tracking-[0.4em] text-[#71717a]">Model Designation</span>
-                    <button 
-                      onClick={() => setShowSyncConfirm(true)}
-                      disabled={fetchingModels}
-                      className="text-[var(--accent-app)] hover:underline flex items-center gap-1 text-[10px] font-black uppercase tracking-widest disabled:opacity-50"
-                    >
-                      {fetchingModels ? 'Syncing...' : 'Sync Models'} <RefreshCw size={10} className={fetchingModels ? 'animate-spin' : ''} />
-                    </button>
+                     <span className="text-[10px] font-black uppercase tracking-[0.4em] text-[#71717a]">Model Designation</span>
                   </div>
-
-                  <AnimatePresence>
-                    {showSyncConfirm && (
-                      <motion.div 
-                        initial={{ opacity: 0, height: 0 }}
-                        animate={{ opacity: 1, height: 'auto' }}
-                        exit={{ opacity: 0, height: 0 }}
-                        className="overflow-hidden mb-4"
-                      >
-                        <div className="bg-slate-100 dark:bg-slate-900 border border-[var(--accent-app)]/30 p-4 space-y-3">
-                          <p className="text-[10px] font-bold uppercase tracking-widest text-[var(--accent-app)]">Initiate model synchronization?</p>
-                          <p className="text-[9px] text-[var(--text-secondary)] uppercase tracking-wide leading-relaxed">
-                            This will query the provider's endpoint to retrieve available intelligence models. Ensure your API key is correctly configured.
-                          </p>
-                          <div className="flex gap-2 pt-2">
-                            <button 
-                              onClick={() => {
-                                setShowSyncConfirm(false);
-                                fetchModels(false);
-                              }}
-                              className="bg-[var(--accent-app)] text-white text-[9px] font-black uppercase tracking-widest py-2 px-4"
-                            >
-                              Confirm
-                            </button>
-                            <button 
-                              onClick={() => setShowSyncConfirm(false)}
-                              className="bg-transparent border border-[var(--border-app)] text-[var(--text-secondary)] text-[9px] font-black uppercase tracking-widest py-2 px-4 hover:bg-slate-200 dark:hover:bg-slate-800"
-                            >
-                              Cancel
-                            </button>
-                          </div>
-                        </div>
-                      </motion.div>
-                    )}
-                  </AnimatePresence>
 
                   <select
                     value={settings.model}
                     onChange={(e) => setSettings(s => ({ ...s, model: e.target.value }))}
                     className="w-full bg-slate-50 dark:bg-slate-800 border border-[var(--border-app)] rounded-none py-3 px-4 focus:outline-none focus:ring-1 focus:ring-[var(--accent-app)] transition-all font-mono text-sm text-[var(--accent-app)]"
                   >
-                    {settings.model && !availableModels.includes(settings.model) && (
+                    {settings.model && !PREDEFINED_MODELS[settings.activeProviderId || '']?.map(m => m.id).includes(settings.model) && (
                       <option value={settings.model}>{settings.model}</option>
                     )}
-                    {availableModels.map(m => (
-                      <option key={m} value={m}>{m}</option>
+                    {Array.from(new Set(PREDEFINED_MODELS[settings.activeProviderId || '']?.map(m => m.category) || [])).map(category => (
+                       <optgroup key={category} label={category}>
+                         {PREDEFINED_MODELS[settings.activeProviderId || ''].filter(m => m.category === category).map(m => (
+                           <option key={m.id} value={m.id}>{m.label}</option>
+                         ))}
+                       </optgroup>
                     ))}
                   </select>
-                  <p className="text-[10px] text-[var(--text-secondary)] uppercase tracking-wider">Sync models for the active provider to populate the dropdown.</p>
                 </div>
               </div>
 
