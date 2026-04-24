@@ -613,9 +613,15 @@ export default function App() {
             if (chunk.candidates?.[0]?.content?.parts) {
               chunk.candidates[0].content.parts.forEach(p => {
                 if (p.inlineData?.data) {
+                  let inferredExt = 'png';
+                  let inferredType = p.inlineData.mimeType || 'image/png';
+                  if (inferredType.startsWith('video/')) inferredExt = 'mp4';
+                  else if (inferredType.includes('jpeg')) inferredExt = 'jpg';
+                  else if (inferredType.includes('webp')) inferredExt = 'webp';
+
                   generatedAttachments.push({
-                     name: `generated_${Date.now()}.png`,
-                     type: p.inlineData.mimeType || 'image/png',
+                     name: `generated_${Date.now()}.${inferredExt}`,
+                     type: inferredType,
                      data: p.inlineData.data,
                      isText: false
                   });
@@ -655,7 +661,7 @@ export default function App() {
                           model.toLowerCase().includes('reasoning') ||
                           model.toLowerCase().includes('latest');
 
-        const isImageModel = model.toLowerCase().includes('dall-e') || model.toLowerCase().includes('image');
+        const isImageModel = model.toLowerCase().includes('dall-e') || model.toLowerCase().includes('image') || model.toLowerCase().includes('video') || model.toLowerCase().includes('sora') || model.toLowerCase().includes('runway') || model.toLowerCase().includes('luma');
 
         const messages = [
           { role: 'system', content: sysInstruction },
@@ -738,9 +744,17 @@ export default function App() {
         if (isImageModel) {
           if (data.data && data.data[0]) {
             let b64 = data.data[0].b64_json;
+            let mimeType = 'image/png';
+            let fileExt = 'png';
+            
             if (!b64 && data.data[0].url) {
               const imgRes = await fetch(data.data[0].url);
               const blob = await imgRes.blob();
+              mimeType = blob.type || 'image/png';
+              if (mimeType.startsWith('video/')) fileExt = 'mp4';
+              else if (mimeType.includes('jpeg')) fileExt = 'jpg';
+              else if (mimeType.includes('webp')) fileExt = 'webp';
+              
               const arrayBuffer = await blob.arrayBuffer();
               const buffer = new Uint8Array(arrayBuffer);
               let binary = '';
@@ -751,17 +765,17 @@ export default function App() {
             }
             if (b64) {
               generatedAttachments.push({
-                 name: `dalle_${Date.now()}.png`,
-                 type: 'image/png',
+                 name: `generated_${Date.now()}.${fileExt}`,
+                 type: mimeType,
                  data: b64,
                  isText: false
               });
-              fullText = "Here is the generated image.";
+              fullText = mimeType.startsWith('video/') ? "Here is the generated video." : "Here is the generated image.";
             } else {
-              fullText = "Failed to extract image from response (no URL or b64_json).";
+              fullText = "Failed to extract media from response (no URL or b64_json).";
             }
           } else {
-            fullText = "Failed to extract image from response.";
+            fullText = "Failed to extract media from response.";
           }
         } else if (isLegacyModel) {
           fullText = data.choices?.[0]?.text || '';
@@ -882,7 +896,20 @@ export default function App() {
       const a = document.createElement('a');
       a.style.display = 'none';
       a.href = url;
-      a.download = filename || `iluv-image-${Date.now()}.jpg`;
+      
+      let defaultExt = '.jpg';
+      let defaultPrefix = 'iluv-image-';
+      
+      if (mimeType.startsWith('video/')) {
+        defaultExt = '.mp4';
+        defaultPrefix = 'iluv-video-';
+      } else if (mimeType.includes('png')) {
+        defaultExt = '.png';
+      } else if (mimeType.includes('webp')) {
+        defaultExt = '.webp';
+      }
+
+      a.download = filename || `${defaultPrefix}${Date.now()}${defaultExt}`;
       document.body.appendChild(a);
       a.click();
       
@@ -892,7 +919,7 @@ export default function App() {
       }, 100);
     } catch (err) {
       console.error('Download extraction failed', err);
-      setError('System could not construct the image file for download. Verify your device policy.');
+      setError('System could not construct the media file for download. Verify your device policy.');
     }
   };
 
@@ -1171,18 +1198,24 @@ export default function App() {
                   </div>
                   {m.attachments && (
                     <div className="mt-3 flex flex-wrap gap-4">
-                      {m.attachments.map((att, i) => (
-                        <div key={i} className={`flex items-center gap-1.5 ${att.type.startsWith('image/') ? 'w-full' : 'p-1.5 bg-black/10 dark:bg-white/10 rounded-sm'}`}>
-                           {att.type.startsWith('image/') ? (
+                      {m.attachments.map((att, i) => {
+                        const isMedia = att.type.startsWith('image/') || att.type.startsWith('video/');
+                        return (
+                        <div key={i} className={`flex items-center gap-1.5 ${isMedia ? 'w-full' : 'p-1.5 bg-black/10 dark:bg-white/10 rounded-sm'}`}>
+                           {isMedia ? (
                              <div className="relative group/dl inline-block max-w-full">
-                               <img src={`data:${att.type};base64,${att.data}`} className="w-full max-w-[400px] h-auto object-contain rounded-xl shadow-lg border border-white/10" />
+                               {att.type.startsWith('video/') ? (
+                                 <video controls src={`data:${att.type};base64,${att.data}`} className="w-full max-w-[600px] h-auto object-contain rounded-xl shadow-lg border border-white/10" />
+                               ) : (
+                                 <img src={`data:${att.type};base64,${att.data}`} className="w-full max-w-[400px] h-auto object-contain rounded-xl shadow-lg border border-white/10" />
+                               )}
                                <button 
                                  onClick={(e) => { e.preventDefault(); handleDownload(att.data, att.name, att.type); }}
-                                 className="absolute inset-0 bg-black/50 opacity-0 group-hover/dl:opacity-100 flex flex-col items-center justify-center transition-all rounded-xl backdrop-blur-sm"
-                                 title="Download Image"
+                                 className={`${att.type.startsWith('video/') ? 'absolute top-2 right-2 p-2 bg-black/50 hover:bg-black/80' : 'absolute inset-0 bg-black/50 opacity-0 group-hover/dl:opacity-100'} flex flex-col items-center justify-center transition-all rounded-xl backdrop-blur-sm z-10`}
+                                 title={`Download ${att.type.startsWith('video/') ? 'Video' : 'Image'}`}
                                >
-                                 <Download size={32} className="text-white mb-2" />
-                                 <span className="text-white text-xs font-bold tracking-widest uppercase">Download</span>
+                                 <Download size={att.type.startsWith('video/') ? 16 : 32} className="text-white mb-2" />
+                                 {!att.type.startsWith('video/') && <span className="text-white text-xs font-bold tracking-widest uppercase">Download</span>}
                                </button>
                              </div>
                            ) : (
@@ -1192,7 +1225,8 @@ export default function App() {
                              </>
                            )}
                         </div>
-                      ))}
+                        );
+                      })}
                     </div>
                   )}
                 </div>
@@ -1251,6 +1285,8 @@ export default function App() {
                     <div key={i} className="group relative flex items-center gap-3 p-3 bg-[#111111] rounded-xl border border-white/5">
                       {file.type.startsWith('image/') ? (
                         <img src={`data:${file.type};base64,${file.data}`} className="w-12 h-12 object-cover rounded-lg" />
+                      ) : file.type.startsWith('video/') ? (
+                        <video src={`data:${file.type};base64,${file.data}`} className="w-12 h-12 object-cover rounded-lg" muted />
                       ) : (
                         <div className="w-12 h-12 flex items-center justify-center bg-black/40 rounded-lg">
                           <FileIcon size={20} className="text-[#3b82f6]" />
