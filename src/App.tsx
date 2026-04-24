@@ -75,27 +75,20 @@ const isGeminiUrl = (url: string) => {
 
 const PREDEFINED_MODELS: Record<string, { id: string; label: string; category: string }[]> = {
   gemini: [
-    { id: 'gemini-3.1-pro-preview', label: 'Gemini 3.1 Pro', category: 'Pro Models' },
-    { id: 'gemini-3-deep-think-preview', label: 'Gemini 3 Deep Think', category: 'Thinking Models' },
-    { id: 'gemini-3-flash-preview', label: 'Gemini 3 Flash', category: 'Fast Models' },
-    { id: 'gemini-3.1-flash-lite-preview', label: 'Gemini 3.1 Flash Lite', category: 'Fast Models' },
-    { id: 'gemini-3.1-flash-image-preview', label: 'Nano Banana 2', category: 'Image Generation' },
-    { id: 'gemini-3-pro-image-preview', label: 'Nano Banana Pro', category: 'Image Generation' },
-    { id: 'imagen-4', label: 'Imagen 4', category: 'Image Generation' },
-    { id: 'imagen-3-fast', label: 'Imagen 3 Fast', category: 'Image Generation' },
+    { id: 'gemini-1.5-pro', label: 'Gemini 1.5 Pro', category: 'Pro Models' },
+    { id: 'gemini-2.0-pro-exp-02-05', label: 'Gemini 2.0 Pro', category: 'Pro Models' },
+    { id: 'gemini-1.5-flash', label: 'Gemini 1.5 Flash', category: 'Fast Models' },
+    { id: 'gemini-2.5-flash', label: 'Gemini 2.5 Flash', category: 'Fast Models' },
+    { id: 'gemini-2.0-flash-thinking-exp-01-21', label: 'Gemini 2.0 Thinking', category: 'Thinking Models' },
+    { id: 'imagen-3.0-generate-002', label: 'Imagen 3.0', category: 'Image Generation' }
   ],
   openai: [
-    { id: 'gpt-5.5-preview', label: 'GPT-5.5 Preview', category: 'Pro Models' },
-    { id: 'gpt-5.4-pro', label: 'GPT-5.4 Pro', category: 'Pro Models' },
-    { id: 'o3-2025-12', label: 'o3-2025-12', category: 'Thinking Models' },
-    { id: 'o4-preview', label: 'o4-preview', category: 'Thinking Models' },
-    { id: 'gpt-5.4-thinking', label: 'GPT-5.4 Thinking', category: 'Thinking Models' },
-    { id: 'gpt-5-mini', label: 'GPT-5 Mini', category: 'Fast Models' },
-    { id: 'gpt-5-nano', label: 'GPT-5 Nano', category: 'Fast Models' },
-    { id: 'gpt-image-2', label: 'GPT Image 2', category: 'Image Generation' },
-    { id: 'gpt-image-2-mini', label: 'GPT Image 2 Mini', category: 'Image Generation' },
-    { id: 'dall-e-3', label: 'DALL-E 3', category: 'Image Generation' },
-    { id: 'gpt-image-1-mini', label: 'GPT Image 1 Mini', category: 'Image Generation' },
+    { id: 'gpt-4o', label: 'GPT-4o', category: 'Pro Models' },
+    { id: 'gpt-4-turbo', label: 'GPT-4 Turbo', category: 'Pro Models' },
+    { id: 'o3-mini', label: 'o3-mini', category: 'Thinking Models' },
+    { id: 'o1', label: 'o1', category: 'Thinking Models' },
+    { id: 'gpt-4o-mini', label: 'GPT-4o-Mini', category: 'Fast Models' },
+    { id: 'dall-e-3', label: 'DALL-E 3', category: 'Image Generation' }
   ]
 };
 
@@ -113,6 +106,7 @@ export default function App() {
   const [showParamMenu, setShowParamMenu] = useState(false);
   const [showStrategy, setShowStrategy] = useState(false);
   const [deferredPrompt, setDeferredPrompt] = useState<any>(null);
+  const [fetchedModels, setFetchedModels] = useState<Record<string, { id: string; label: string; category: string }[]>>({});
   const fileInputRef = useRef<HTMLInputElement>(null);
   
   const [settings, setSettings] = useState<AppSettings>(() => {
@@ -176,9 +170,70 @@ export default function App() {
     return settings.providers.find(p => p.name.toLowerCase().includes('google')) || settings.providers[0];
   };
 
+  const fetchProviderModels = async (provider: any) => {
+    if (!provider || !provider.apiKey) return;
+    try {
+      const isGemini = isGeminiUrl(provider.baseUrl);
+      let newModels: { id: string; label: string; category: string }[] = [];
+      if (isGemini) {
+        const url = `${cleanBaseUrl(provider.baseUrl)}/v1beta/models?key=${provider.apiKey}`;
+        const res = await fetch(url);
+        if (res.ok) {
+          const data = await res.json();
+          if (data.models) {
+            newModels = data.models.map((m: any) => {
+              const id = m.name.replace('models/', '');
+              const label = m.displayName || id;
+              let category = 'Other Models';
+              if (id.includes('pro')) category = 'Pro Models';
+              else if (id.includes('thinking') || id.includes('think') || id.includes('o1') || id.includes('o3') || id.includes('o4')) category = 'Thinking Models';
+              else if (id.includes('flash') || id.includes('mini') || id.includes('lite') || id.includes('nano')) category = 'Fast Models';
+              if (id.includes('image') || id.includes('imagen') || id.includes('vision') || id.includes('dall-e')) category = 'Image Generation';
+              return { id, label, category };
+            });
+          }
+        }
+      } else {
+        const url = `${cleanBaseUrl(provider.baseUrl)}/v1/models`;
+        const res = await fetch(url, { headers: { 'Authorization': `Bearer ${provider.apiKey}` } });
+        if (res.ok) {
+          const data = await res.json();
+          if (data.data) {
+            newModels = data.data.map((m: any) => {
+              const id = m.id;
+              const label = id;
+              let category = 'Other Models';
+              if (id.includes('pro') || id.includes('gpt-4o') || id.includes('gpt-5') || id.includes('gpt-4')) {
+                if (id.includes('mini') || id.includes('nano')) category = 'Fast Models';
+                else category = 'Pro Models';
+              }
+              else if (id.includes('thinking') || id.includes('o1') || id.includes('o3') || id.includes('o4')) category = 'Thinking Models';
+              else if (id.includes('flash') || id.includes('mini') || id.includes('lite') || id.includes('nano') || id.includes('gpt-3.5')) category = 'Fast Models';
+              if (id.includes('image') || id.includes('dall-e')) category = 'Image Generation';
+              return { id, label, category };
+            });
+          }
+        }
+      }
+      
+      if (newModels.length > 0) {
+        setFetchedModels(prev => ({ ...prev, [provider.id]: newModels }));
+      }
+    } catch (err) {
+      console.error(`Failed to fetch models for ${provider.name}`, err);
+    }
+  };
+
   const scrollRef = useRef<HTMLDivElement>(null);
 
   // --- Effects ---
+  useEffect(() => {
+    // Attempt to fetch models for all enabled providers
+    settings.providers.forEach(p => {
+      if (p.enabled) fetchProviderModels(p);
+    });
+  }, [settings.providers]);
+
   useEffect(() => {
     const handleBeforeInstallPrompt = (e: Event) => {
       e.preventDefault();
@@ -459,49 +514,64 @@ export default function App() {
           httpOptions: provider.baseUrl !== DEFAULT_BASE_URL ? { baseUrl: provider.baseUrl } : undefined
         });
         
-        const isImagen = model.toLowerCase().includes('imagen') || model.toLowerCase().includes('nano') || model.toLowerCase().includes('image');
+        let isImagen = model.toLowerCase().includes('imagen') || model.toLowerCase().includes('nano') || model.toLowerCase().includes('image');
+        let imagenSuccess = false;
 
         if (isImagen) {
-          const promptMsg = currentSession.messages[currentSession.messages.length - 1].content || 'A beautiful image';
-          const response = await ai.models.generateImages({
-            model: model,
-            prompt: promptMsg,
-            config: {
-              numberOfImages: 1,
-              outputMimeType: 'image/jpeg',
-              aspectRatio: '1:1',
-            },
-          });
-          
-          if (response.generatedImages && response.generatedImages[0]) {
-            const base64EncodeString = response.generatedImages[0].image.imageBytes;
-            generatedAttachments.push({
-               name: `imagen_${Date.now()}.jpeg`,
-               type: 'image/jpeg',
-               data: base64EncodeString,
-               isText: false
+          try {
+            const promptMsg = currentSession.messages[currentSession.messages.length - 1].content || 'A beautiful image';
+            const response = await ai.models.generateImages({
+              model: model,
+              prompt: promptMsg,
+              config: {
+                numberOfImages: 1,
+                outputMimeType: 'image/jpeg',
+                aspectRatio: '1:1',
+              },
             });
-            fullText = "Here is the generated image.";
-          } else {
-            fullText = "Failed to generate image.";
-          }
-
-          setSessions(prev => prev.map(s => {
-            if (s.id === sessionId) {
-              return {
-                ...s,
-                messages: s.messages.map(m => m.id === assistantMessageId ? { 
-                  ...m, 
-                  content: fullText,
-                  modelUsed: model,
-                  attachments: generatedAttachments.length > 0 ? generatedAttachments : undefined
-                } : m),
-                updatedAt: Date.now()
-              };
+            
+            if (response.generatedImages && response.generatedImages[0]) {
+              const base64EncodeString = response.generatedImages[0].image.imageBytes;
+              generatedAttachments.push({
+                 name: `imagen_${Date.now()}.jpeg`,
+                 type: 'image/jpeg',
+                 data: base64EncodeString,
+                 isText: false
+              });
+              fullText = "Here is the generated image.";
+              imagenSuccess = true;
+            } else {
+              fullText = "Failed to generate image.";
+              imagenSuccess = true; // it succeeded in api call but failed to give image? let's not fallback.
             }
-            return s;
-          }));
-        } else {
+
+            setSessions(prev => prev.map(s => {
+              if (s.id === sessionId) {
+                return {
+                  ...s,
+                  messages: s.messages.map(m => m.id === assistantMessageId ? { 
+                    ...m, 
+                    content: fullText,
+                    modelUsed: model,
+                    attachments: generatedAttachments.length > 0 ? generatedAttachments : undefined
+                  } : m),
+                  updatedAt: Date.now()
+                };
+              }
+              return s;
+            }));
+          } catch (e: any) {
+            if (e && e.message && (e.message.includes('predict') || e.message.includes('not supported') || e.message.includes('404'))) {
+              console.warn("generateImages predict method unsupported or 404, falling back to generateContentStream...", e);
+              imagenSuccess = false;
+              isImagen = false;
+            } else {
+              throw e;
+            }
+          }
+        }
+        
+        if (!isImagen || !imagenSuccess) {
           const history = currentSession.messages.map(m => {
             const parts: any[] = [{ text: m.content || '' }];
             if (m.attachments) {
@@ -624,7 +694,6 @@ export default function App() {
           requestBody.prompt = currentSession.messages[currentSession.messages.length - 1].content || 'A beautiful image';
           requestBody.n = 1;
           requestBody.size = "1024x1024";
-          requestBody.response_format = "b64_json";
         } else if (isLegacyModel) {
           requestBody.prompt = messages.map(m => `${m.role === 'system' ? 'Instruction' : m.role.charAt(0).toUpperCase() + m.role.slice(1)}: ${m.content}`).join('\n') + '\nAssistant: ';
           requestBody.max_tokens = maxTokens;
@@ -667,14 +736,30 @@ export default function App() {
         const data = await res.json();
         
         if (isImageModel) {
-          if (data.data && data.data[0] && data.data[0].b64_json) {
-            generatedAttachments.push({
-               name: `dalle_${Date.now()}.png`,
-               type: 'image/png',
-               data: data.data[0].b64_json,
-               isText: false
-            });
-            fullText = "Here is the generated image.";
+          if (data.data && data.data[0]) {
+            let b64 = data.data[0].b64_json;
+            if (!b64 && data.data[0].url) {
+              const imgRes = await fetch(data.data[0].url);
+              const blob = await imgRes.blob();
+              const arrayBuffer = await blob.arrayBuffer();
+              const buffer = new Uint8Array(arrayBuffer);
+              let binary = '';
+              for (let i = 0; i < buffer.byteLength; i++) {
+                binary += String.fromCharCode(buffer[i]);
+              }
+              b64 = window.btoa(binary);
+            }
+            if (b64) {
+              generatedAttachments.push({
+                 name: `dalle_${Date.now()}.png`,
+                 type: 'image/png',
+                 data: b64,
+                 isText: false
+              });
+              fullText = "Here is the generated image.";
+            } else {
+              fullText = "Failed to extract image from response (no URL or b64_json).";
+            }
           } else {
             fullText = "Failed to extract image from response.";
           }
@@ -810,6 +895,22 @@ export default function App() {
       setError('System could not construct the image file for download. Verify your device policy.');
     }
   };
+
+  const getDisplayModels = () => {
+    const defaultModels = PREDEFINED_MODELS[settings.activeProviderId || ''] || [];
+    const fetched = fetchedModels[settings.activeProviderId || ''] || [];
+    
+    // Combine fetched models with predefined, allowing fetched to override
+    if (fetched.length > 0) {
+      // Merge: keep predefined that might not have been returned, or just trust fetched entirely?
+      // Better to just return fetched if we successfully fetched them. It's safer because if OpenAI doesn't list gpt-5, we shouldn't show it (prevents 404).
+      return fetched;
+    }
+    return defaultModels;
+  };
+
+  const displayModels = getDisplayModels();
+  const displayCategories = Array.from(new Set(displayModels.map(m => m.category)));
 
   // --- UI Components ---
   return (
@@ -1187,13 +1288,22 @@ export default function App() {
                        <div className="space-y-3">
                          <div className="flex justify-between items-center mb-3 text-[10px] font-black uppercase tracking-widest text-[#71717a]">
                            <label>Model</label>
+                           <button 
+                             onClick={() => {
+                               const provider = getActiveProvider();
+                               if (provider) fetchProviderModels(provider);
+                             }}
+                             className="text-[9px] font-bold text-[#0070f3] hover:underline uppercase tracking-wide flex items-center gap-1"
+                           >
+                             <RefreshCw size={10} />
+                           </button>
                          </div>
                          <div className="max-h-40 overflow-y-auto custom-scrollbar pr-2 space-y-3">
-                           {Array.from(new Set(PREDEFINED_MODELS[settings.activeProviderId || '']?.map(m => m.category) || [])).map(category => (
+                           {displayCategories.map(category => (
                              <div key={category}>
                                <div className="text-[9px] uppercase tracking-widest text-[#71717a] font-bold mb-1 pl-2">{category}</div>
                                <div className="space-y-1">
-                                 {PREDEFINED_MODELS[settings.activeProviderId || ''].filter(m => m.category === category).map(m => (
+                                 {displayModels.filter(m => m.category === category).map(m => (
                                    <button
                                      key={m.id}
                                      onClick={() => {
@@ -1412,6 +1522,16 @@ export default function App() {
                 <div className="space-y-6 pt-4 border-t border-[var(--border-app)]">
                   <div className="flex items-center justify-between">
                      <span className="text-[10px] font-black uppercase tracking-[0.4em] text-[#71717a]">Model Designation</span>
+                     <button 
+                       onClick={() => {
+                         const provider = getActiveProvider();
+                         if (provider) fetchProviderModels(provider);
+                       }}
+                       className="text-[9px] font-bold text-[#0070f3] hover:underline uppercase tracking-wide flex items-center gap-1"
+                     >
+                       <RefreshCw size={10} />
+                       Refresh Models
+                     </button>
                   </div>
 
                   <select
@@ -1419,12 +1539,12 @@ export default function App() {
                     onChange={(e) => setSettings(s => ({ ...s, model: e.target.value }))}
                     className="w-full bg-slate-50 dark:bg-slate-800 border border-[var(--border-app)] rounded-none py-3 px-4 focus:outline-none focus:ring-1 focus:ring-[var(--accent-app)] transition-all font-mono text-sm text-[var(--accent-app)]"
                   >
-                    {settings.model && !PREDEFINED_MODELS[settings.activeProviderId || '']?.map(m => m.id).includes(settings.model) && (
+                    {settings.model && !displayModels.map(m => m.id).includes(settings.model) && (
                       <option value={settings.model}>{settings.model}</option>
                     )}
-                    {Array.from(new Set(PREDEFINED_MODELS[settings.activeProviderId || '']?.map(m => m.category) || [])).map(category => (
+                    {displayCategories.map(category => (
                        <optgroup key={category} label={category}>
-                         {PREDEFINED_MODELS[settings.activeProviderId || ''].filter(m => m.category === category).map(m => (
+                         {displayModels.filter(m => m.category === category).map(m => (
                            <option key={m.id} value={m.id}>{m.label}</option>
                          ))}
                        </optgroup>
