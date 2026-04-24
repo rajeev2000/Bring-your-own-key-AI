@@ -75,30 +75,27 @@ const isGeminiUrl = (url: string) => {
 
 const PREDEFINED_MODELS: Record<string, { id: string; label: string; category: string }[]> = {
   gemini: [
-    { id: 'gemini-3.1-pro', label: 'Gemini 3.1 Pro', category: 'Pro Models' },
-    { id: 'gemini-3.0-pro', label: 'Gemini 3.0 Pro', category: 'Pro Models' },
-    { id: 'gemini-2.0-pro', label: 'Gemini 2.0 Pro', category: 'Pro Models' },
-    { id: 'gemini-3.1-flash', label: 'Gemini 3.1 Flash', category: 'Thinking Models' },
-    { id: 'gemini-3.0-flash', label: 'Gemini 3.0 Flash', category: 'Thinking Models' },
-    { id: 'gemini-2.0-flash', label: 'Gemini 2.0 Flash', category: 'Thinking Models' },
-    { id: 'gemini-3.1-flash-lite', label: 'Gemini 3.1 Flash Lite', category: 'Fast Models' },
-    { id: 'gemini-3.0-flash-lite', label: 'Gemini 3.0 Flash Lite', category: 'Fast Models' },
-    { id: 'gemini-2.0-flash-lite', label: 'Gemini 2.0 Flash Lite', category: 'Fast Models' },
-    { id: 'nana-banana', label: 'Nana Banana', category: 'Image Generation' },
-    { id: 'imagen-3.0-generate-001', label: 'Imagen 3.0', category: 'Image Generation' },
-    { id: 'imagen-2.0', label: 'Imagen 2.0', category: 'Image Generation' },
+    { id: 'gemini-3.1-pro-preview', label: 'Gemini 3.1 Pro', category: 'Pro Models' },
+    { id: 'gemini-3-deep-think-preview', label: 'Gemini 3 Deep Think', category: 'Thinking Models' },
+    { id: 'gemini-3-flash-preview', label: 'Gemini 3 Flash', category: 'Fast Models' },
+    { id: 'gemini-3.1-flash-lite-preview', label: 'Gemini 3.1 Flash Lite', category: 'Fast Models' },
+    { id: 'gemini-3.1-flash-image-preview', label: 'Nano Banana 2', category: 'Image Generation' },
+    { id: 'gemini-3-pro-image-preview', label: 'Nano Banana Pro', category: 'Image Generation' },
+    { id: 'imagen-4', label: 'Imagen 4', category: 'Image Generation' },
+    { id: 'imagen-3-fast', label: 'Imagen 3 Fast', category: 'Image Generation' },
   ],
   openai: [
-    { id: 'gpt-4.5', label: 'GPT-4.5', category: 'Pro Models' },
-    { id: 'gpt-4o', label: 'GPT-4o', category: 'Pro Models' },
-    { id: 'gpt-4-turbo', label: 'GPT-4 Turbo', category: 'Pro Models' },
-    { id: 'o1', label: 'o1', category: 'Thinking Models' },
-    { id: 'o3-mini', label: 'o3-mini', category: 'Thinking Models' },
-    { id: 'o1-mini', label: 'o1-mini', category: 'Thinking Models' },
-    { id: 'gpt-4o-mini', label: 'GPT-4o-Mini', category: 'Fast Models' },
-    { id: 'gpt-3.5-turbo', label: 'GPT-3.5 Turbo', category: 'Fast Models' },
+    { id: 'gpt-5.5-preview', label: 'GPT-5.5 Preview', category: 'Pro Models' },
+    { id: 'gpt-5.4-pro', label: 'GPT-5.4 Pro', category: 'Pro Models' },
+    { id: 'o3-2025-12', label: 'o3-2025-12', category: 'Thinking Models' },
+    { id: 'o4-preview', label: 'o4-preview', category: 'Thinking Models' },
+    { id: 'gpt-5.4-thinking', label: 'GPT-5.4 Thinking', category: 'Thinking Models' },
+    { id: 'gpt-5-mini', label: 'GPT-5 Mini', category: 'Fast Models' },
+    { id: 'gpt-5-nano', label: 'GPT-5 Nano', category: 'Fast Models' },
+    { id: 'gpt-image-2', label: 'GPT Image 2', category: 'Image Generation' },
+    { id: 'gpt-image-2-mini', label: 'GPT Image 2 Mini', category: 'Image Generation' },
     { id: 'dall-e-3', label: 'DALL-E 3', category: 'Image Generation' },
-    { id: 'dall-e-2', label: 'DALL-E 2', category: 'Image Generation' },
+    { id: 'gpt-image-1-mini', label: 'GPT Image 1 Mini', category: 'Image Generation' },
   ]
 };
 
@@ -462,7 +459,7 @@ export default function App() {
           httpOptions: provider.baseUrl !== DEFAULT_BASE_URL ? { baseUrl: provider.baseUrl } : undefined
         });
         
-        const isImagen = model.toLowerCase().includes('imagen') || model.toLowerCase().includes('nana');
+        const isImagen = model.toLowerCase().includes('imagen') || model.toLowerCase().includes('nano') || model.toLowerCase().includes('image');
 
         if (isImagen) {
           const promptMsg = currentSession.messages[currentSession.messages.length - 1].content || 'A beautiful image';
@@ -583,10 +580,12 @@ export default function App() {
         
         const isO1Model = model.toLowerCase().startsWith('o1') || 
                           model.toLowerCase().startsWith('o3') || 
+                          model.toLowerCase().startsWith('o4') || 
+                          model.toLowerCase().includes('thinking') ||
                           model.toLowerCase().includes('reasoning') ||
                           model.toLowerCase().includes('latest');
 
-        const isImageModel = model.toLowerCase().includes('dall-e');
+        const isImageModel = model.toLowerCase().includes('dall-e') || model.toLowerCase().includes('image');
 
         const messages = [
           { role: 'system', content: sysInstruction },
