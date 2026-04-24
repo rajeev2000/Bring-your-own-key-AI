@@ -189,6 +189,7 @@ export default function App() {
               else if (id.includes('thinking') || id.includes('think') || id.includes('o1') || id.includes('o3') || id.includes('o4')) category = 'Thinking Models';
               else if (id.includes('flash') || id.includes('mini') || id.includes('lite') || id.includes('nano')) category = 'Fast Models';
               if (id.includes('image') || id.includes('imagen') || id.includes('vision') || id.includes('dall-e')) category = 'Image Generation';
+              if (id.includes('video') || id.includes('runway') || id.includes('sora') || id.includes('luma') || id.includes('veo') || id.includes('kling') || id.includes('haiper') || id.includes('pika') || id.includes('minimax') || id.includes('hailuo')) category = 'Video Generation';
               return { id, label, category };
             });
           }
@@ -210,6 +211,7 @@ export default function App() {
               else if (id.includes('thinking') || id.includes('o1') || id.includes('o3') || id.includes('o4')) category = 'Thinking Models';
               else if (id.includes('flash') || id.includes('mini') || id.includes('lite') || id.includes('nano') || id.includes('gpt-3.5')) category = 'Fast Models';
               if (id.includes('image') || id.includes('dall-e')) category = 'Image Generation';
+              if (id.includes('video') || id.includes('runway') || id.includes('sora') || id.includes('luma') || id.includes('veo') || id.includes('kling') || id.includes('haiper') || id.includes('pika') || id.includes('minimax') || id.includes('hailuo')) category = 'Video Generation';
               return { id, label, category };
             });
           }
@@ -661,7 +663,7 @@ export default function App() {
                           model.toLowerCase().includes('reasoning') ||
                           model.toLowerCase().includes('latest');
 
-        const isImageModel = model.toLowerCase().includes('dall-e') || model.toLowerCase().includes('image') || model.toLowerCase().includes('video') || model.toLowerCase().includes('sora') || model.toLowerCase().includes('runway') || model.toLowerCase().includes('luma');
+        const isImageModel = model.toLowerCase().includes('dall-e') || model.toLowerCase().includes('image') || model.toLowerCase().includes('video') || model.toLowerCase().includes('sora') || model.toLowerCase().includes('runway') || model.toLowerCase().includes('luma') || model.toLowerCase().includes('veo') || model.toLowerCase().includes('kling') || model.toLowerCase().includes('minimax') || model.toLowerCase().includes('hailuo') || model.toLowerCase().includes('pika') || model.toLowerCase().includes('haiper');
 
         const messages = [
           { role: 'system', content: sysInstruction },
@@ -698,8 +700,10 @@ export default function App() {
 
         if (isImageModel) {
           requestBody.prompt = currentSession.messages[currentSession.messages.length - 1].content || 'A beautiful image';
-          requestBody.n = 1;
-          requestBody.size = "1024x1024";
+          if (!model.toLowerCase().includes('video') && !model.toLowerCase().includes('runway') && !model.toLowerCase().includes('luma') && !model.toLowerCase().includes('sora') && !model.toLowerCase().includes('kling') && !model.toLowerCase().includes('veo') && !model.toLowerCase().includes('hailuo') && !model.toLowerCase().includes('minimax')) {
+            requestBody.n = 1;
+            requestBody.size = "1024x1024";
+          }
         } else if (isLegacyModel) {
           requestBody.prompt = messages.map(m => `${m.role === 'system' ? 'Instruction' : m.role.charAt(0).toUpperCase() + m.role.slice(1)}: ${m.content}`).join('\n') + '\nAssistant: ';
           requestBody.max_tokens = maxTokens;
@@ -742,26 +746,29 @@ export default function App() {
         const data = await res.json();
         
         if (isImageModel) {
-          if (data.data && data.data[0]) {
-            let b64 = data.data[0].b64_json;
+          const item = (data.data && data.data[0]) ? data.data[0] : data;
+          let b64 = item.b64_json;
+          let url = item.url || item.video_url || item.image_url;
+          
+          if (b64 || url) {
             let mimeType = 'image/png';
             let fileExt = 'png';
             
-            if (!b64 && data.data[0].url) {
-              const imgRes = await fetch(data.data[0].url);
+            if (!b64 && url) {
+              const imgRes = await fetch(url);
               const blob = await imgRes.blob();
               mimeType = blob.type || 'image/png';
               if (mimeType.startsWith('video/')) fileExt = 'mp4';
               else if (mimeType.includes('jpeg')) fileExt = 'jpg';
               else if (mimeType.includes('webp')) fileExt = 'webp';
               
-              const arrayBuffer = await blob.arrayBuffer();
-              const buffer = new Uint8Array(arrayBuffer);
-              let binary = '';
-              for (let i = 0; i < buffer.byteLength; i++) {
-                binary += String.fromCharCode(buffer[i]);
-              }
-              b64 = window.btoa(binary);
+              const blobToBase64 = (b: Blob): Promise<string> => new Promise((resolve, reject) => {
+                const reader = new FileReader();
+                reader.onloadend = () => resolve((reader.result as string).split(',')[1]);
+                reader.onerror = reject;
+                reader.readAsDataURL(b);
+              });
+              b64 = await blobToBase64(blob);
             }
             if (b64) {
               generatedAttachments.push({
@@ -775,7 +782,7 @@ export default function App() {
               fullText = "Failed to extract media from response (no URL or b64_json).";
             }
           } else {
-            fullText = "Failed to extract media from response.";
+            fullText = "Failed to extract media from response. It might be pending or in an unsupported format: " + JSON.stringify(data).slice(0, 100);
           }
         } else if (isLegacyModel) {
           fullText = data.choices?.[0]?.text || '';
@@ -889,8 +896,18 @@ export default function App() {
 
   const handleDownload = async (base64: string, filename: string, mimeType: string) => {
     try {
-      const response = await fetch(`data:${mimeType};base64,${base64}`);
-      const blob = await response.blob();
+      const byteCharacters = atob(base64);
+      const byteArrays = [];
+      for (let offset = 0; offset < byteCharacters.length; offset += 512) {
+        const slice = byteCharacters.slice(offset, offset + 512);
+        const byteNumbers = new Array(slice.length);
+        for (let i = 0; i < slice.length; i++) {
+          byteNumbers[i] = slice.charCodeAt(i);
+        }
+        const byteArray = new Uint8Array(byteNumbers);
+        byteArrays.push(byteArray);
+      }
+      const blob = new Blob(byteArrays, { type: mimeType });
       const url = URL.createObjectURL(blob);
       
       const a = document.createElement('a');
