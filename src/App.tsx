@@ -96,44 +96,39 @@ export default function App() {
     const saved = localStorage.getItem('iluv_settings');
     if (saved) {
       const parsed = JSON.parse(saved);
-      // Migration for old settings
-      if (!parsed.providers) {
-        return {
-          providers: [
-            {
-              id: generateId(),
-              name: 'Google AI',
-              apiKey: parsed.apiKey || '',
-              baseUrl: parsed.baseUrl || DEFAULT_BASE_URL,
-              enabled: true
-            },
-            {
-              id: generateId(),
-              name: 'OpenAI',
-              apiKey: '',
-              baseUrl: 'https://api.openai.com',
-              enabled: true
-            }
-          ],
-          activeProviderId: undefined,
-          model: parsed.model || DEFAULT_MODEL,
-          theme: 'system',
-          maxOutputTokens: parsed.maxOutputTokens || 2048
-        };
+      // Hardcode standard providers
+      parsed.providers = [
+        {
+          id: 'gemini',
+          name: 'Google AI',
+          apiKey: parsed.providers?.find((p: any) => p.name.includes('Google'))?.apiKey || parsed.apiKey || '',
+          baseUrl: parsed.providers?.find((p: any) => p.name.includes('Google'))?.baseUrl || DEFAULT_BASE_URL,
+          enabled: true
+        },
+        {
+          id: 'openai',
+          name: 'OpenAI',
+          apiKey: parsed.providers?.find((p: any) => p.name.includes('OpenAI'))?.apiKey || '',
+          baseUrl: parsed.providers?.find((p: any) => p.name.includes('OpenAI'))?.baseUrl || 'https://api.openai.com',
+          enabled: true
+        }
+      ];
+      if (!parsed.activeProviderId || (parsed.activeProviderId !== 'gemini' && parsed.activeProviderId !== 'openai')) {
+         parsed.activeProviderId = 'gemini';
       }
       return parsed;
     }
     return {
       providers: [
         {
-          id: generateId(),
+          id: 'gemini',
           name: 'Google AI',
           apiKey: '',
           baseUrl: DEFAULT_BASE_URL,
           enabled: true
         },
         {
-          id: generateId(),
+          id: 'openai',
           name: 'OpenAI',
           apiKey: '',
           baseUrl: 'https://api.openai.com',
@@ -242,15 +237,12 @@ export default function App() {
       } else {
         const url = `${base}/v1/models`;
         
-        // Use local proxy to avoid CORS
-        const res = await fetch('/api/proxy', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            url: url,
-            method: 'GET',
-            headers: { 'Authorization': `Bearer ${provider.apiKey}` }
-          })
+        const res = await fetch(url, {
+          method: 'GET',
+          headers: { 
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${provider.apiKey}` 
+          }
         });
         
         const contentType = res.headers.get('content-type');
@@ -647,18 +639,13 @@ export default function App() {
           }
         }
 
-        const res = await fetch('/api/proxy', {
+        const res = await fetch(url, {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            url,
-            method: 'POST',
-            headers: {
-              'Authorization': `Bearer ${provider.apiKey}`,
-              'Content-Type': 'application/json'
-            },
-            body: requestBody
-          })
+          headers: {
+            'Authorization': `Bearer ${provider.apiKey}`,
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify(requestBody)
         });
 
         const contentType = res.headers.get('content-type');
@@ -672,7 +659,7 @@ export default function App() {
           } else {
             errorBody = await res.text();
           }
-          throw new Error(errorBody ? `${res.status}: ${errorBody.slice(0, 500)}` : `Failed to fetch from provider via proxy (${res.status})`);
+          throw new Error(errorBody ? `${res.status}: ${errorBody.slice(0, 500)}` : `Failed to fetch from provider (${res.status})`);
         }
 
         if (!isJson) {
@@ -1362,21 +1349,6 @@ export default function App() {
                 <div className="space-y-6 pt-4 border-t border-[var(--border-app)]">
                   <div className="flex items-center justify-between">
                     <span className="text-[10px] font-black uppercase tracking-[0.4em] text-[#71717a]">Manage Providers</span>
-                    <button 
-                      onClick={() => {
-                        const newProvider = {
-                          id: generateId(),
-                          name: 'New Provider',
-                          apiKey: '',
-                          baseUrl: 'https://api.openai.com',
-                          enabled: true
-                        };
-                        setSettings(s => ({ ...s, providers: [...s.providers, newProvider] }));
-                      }}
-                      className="text-[var(--accent-app)] hover:underline flex items-center gap-1 text-[10px] font-black uppercase tracking-widest"
-                    >
-                      Add Provider <Plus size={10} />
-                    </button>
                   </div>
 
                   {settings.providers.map((provider, idx) => (
@@ -1384,40 +1356,10 @@ export default function App() {
                       <div className="flex items-center justify-between mb-2">
                         <input 
                           value={provider.name}
-                          onChange={(e) => {
-                            const newProviders = [...settings.providers];
-                            newProviders[idx].name = e.target.value;
-                            setSettings(s => ({ ...s, providers: newProviders }));
-                          }}
+                          readOnly
                           className="bg-transparent border-none focus:ring-0 font-bold text-sm text-[var(--accent-app)] p-0 w-2/3"
                         />
                         <div className="flex items-center gap-2">
-                          <button 
-                            onClick={() => {
-                              const newProviders = [...settings.providers];
-                              newProviders[idx].enabled = !newProviders[idx].enabled;
-                              setSettings(s => ({ ...s, providers: newProviders }));
-                            }}
-                            className={`p-1.5 rounded-none border transition-colors ${provider.enabled ? 'bg-green-500/10 border-green-500/50 text-green-500' : 'bg-red-500/10 border-red-500/50 text-red-500'}`}
-                            title={provider.enabled ? 'Disable' : 'Enable'}
-                          >
-                            <Sparkles size={12} />
-                          </button>
-                          {settings.providers.length > 1 && (
-                            <button 
-                              onClick={() => {
-                                const newProviders = settings.providers.filter(p => p.id !== provider.id);
-                                setSettings(s => ({ 
-                                  ...s, 
-                                  providers: newProviders,
-                                  activeProviderId: settings.activeProviderId === provider.id ? newProviders[0].id : settings.activeProviderId
-                                }));
-                              }}
-                              className="p-1.5 bg-red-500/10 border border-red-500/50 text-red-500 rounded-none"
-                            >
-                              <Trash2 size={12} />
-                            </button>
-                          )}
                         </div>
                       </div>
                       
