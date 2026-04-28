@@ -29,7 +29,8 @@ import {
   Check,
   Image as ImageIcon,
   Sliders,
-  RefreshCw
+  RefreshCw,
+  Headphones
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import ReactMarkdown from 'react-markdown';
@@ -960,6 +961,110 @@ export default function App() {
     URL.revokeObjectURL(url);
   };
 
+  const generatePodcastAudio = async () => {
+    const session = getActiveSession();
+    const provider = getActiveProvider();
+    
+    if (!session || !provider || !provider.apiKey) {
+      setError('Please provide an API key for the active provider in settings to generate podcast.');
+      setShowSettings(true);
+      return;
+    }
+
+    if (isSessionLoading(session.id)) return;
+    setLoadingSessions(prev => new Set(prev).add(session.id));
+
+    const podcastId = generateId();
+    
+    setSessions(prev => prev.map(s => {
+      if (s.id === session.id) {
+        return {
+          ...s,
+          messages: [...s.messages, {
+            id: podcastId,
+            role: 'assistant',
+            content: '*Generating podcast audio for this session... This might take a few moments.*',
+            timestamp: Date.now(),
+            isStreaming: true
+          }]
+        };
+      }
+      return s;
+    }));
+
+    try {
+      const activeBaseUrl = provider.baseUrl || DEFAULT_BASE_URL;
+      const ai = new GoogleGenAI({ 
+        apiKey: provider.apiKey, 
+        httpOptions: activeBaseUrl !== DEFAULT_BASE_URL ? { baseUrl: activeBaseUrl } : undefined
+      });
+      
+      const prompt = "Summarize the key points of our conversation so far into an engaging 1-minute podcast. Keep it enthusiastic, informative, and speak directly to the listener as a podcast host.";
+      // We take up to last 20 messages to avoid token bloat
+      const historyToSend = session.messages.slice(-20).map(m => ({
+        role: (m.role === 'user' ? 'user' : 'model') as 'user' | 'model',
+        parts: [{ text: m.content }]
+      }));
+
+      const response = await ai.models.generateContent({
+        model: 'gemini-2.5-flash',
+        contents: [...historyToSend, { role: 'user', parts: [{ text: prompt }] }],
+        config: {
+          responseModalities: ["AUDIO"],
+          speechConfig: {
+            voiceConfig: {
+              prebuiltVoiceConfig: {
+                voiceName: "Aoede" // Podcast-style voice
+              }
+            }
+          }
+        }
+      });
+
+      const b64 = response.text;
+      const audioUrl = b64 ? `data:audio/wav;base64,${b64}` : undefined;
+
+      setSessions(prev => prev.map(s => {
+        if (s.id === session.id) {
+          return {
+            ...s,
+            messages: s.messages.map(m => 
+              m.id === podcastId ? { 
+                ...m, 
+                content: "Here is your generated podcast summary:", 
+                audioUrl: audioUrl,
+                isStreaming: false 
+              } : m
+            )
+          };
+        }
+        return s;
+      }));
+    } catch (err: any) {
+      setSessions(prev => prev.map(s => {
+        if (s.id === session.id) {
+          return {
+            ...s,
+            messages: s.messages.map(m => 
+              m.id === podcastId ? { 
+                ...m, 
+                content: `Error generating podcast: ${err.message}`, 
+                isStreaming: false 
+              } : m
+            )
+          };
+        }
+        return s;
+      }));
+    } finally {
+      setLoadingSessions(prev => {
+        const next = new Set(prev);
+        next.delete(session.id);
+        return next;
+      });
+    }
+  };
+
   const generateVisualReport = () => {
     const request = "Please analyze the chat history above. Determine if there is any numerical, categorical, or temporal data that can be visualized. If there is, summarize it concisely and provide a JSON configuration for a 'recharts' chart of the data inside a ```recharts code block. Ensure the JSON has: type ('bar', 'line', 'pie', 'area'), data (array of objects), xAxisKey (string), series (array of {key, color} objects), and title (string). If no relevant data is found, output a message indicating no visualization could be made.";
     handleSendMessage(request);
@@ -1268,6 +1373,13 @@ export default function App() {
                 >
                   <BarChartIcon size={18} />
                 </button>
+                <button 
+                  onClick={generatePodcastAudio}
+                  title="Generate Podcast Audio"
+                  className="p-2 hover:bg-white dark:hover:bg-slate-800 rounded-none transition-all text-slate-600 dark:text-slate-300"
+                >
+                  <Headphones size={18} />
+                </button>
               </div>
             )}
           </div>
@@ -1377,6 +1489,12 @@ export default function App() {
                     </ReactMarkdown>
                   </div>
                   
+                  {m.audioUrl && (
+                    <div className="mt-4 pt-4 border-t border-[#111111] w-full">
+                       <audio controls className="w-full h-10 outline-none" src={m.audioUrl} />
+                    </div>
+                  )}
+
                   {m.role === 'assistant' && m.thoughtProcess && (
                     <div className="mt-4 pt-4 border-t border-white/10">
                       <button 

@@ -17,6 +17,7 @@ export interface Message {
   attachments?: Attachment[];
   isStreaming?: boolean;
   thoughtProcess?: string;
+  audioUrl?: string;
 }
 
 export interface ChatSession {
