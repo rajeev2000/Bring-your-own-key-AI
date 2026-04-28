@@ -314,12 +314,102 @@ export default function App() {
     }
   };
 
-  const handleSendMessage = async (overrideInput?: string) => {
+  const [openThoughts, setOpenThoughts] = useState<Record<string, boolean>>({});
+
+  const calculateSimilarity = (s1: string, s2: string) => {
+    const set1 = new Set(s1.split(/\s+/));
+    const set2 = new Set(s2.split(/\s+/));
+    const intersection = new Set([...set1].filter(x => set2.has(x)));
+    return (2.0 * intersection.size) / (set1.size + set2.size);
+  };
+
+  const findLocalCacheMatch = (query: string) => {
+    const normalizedQuery = query.toLowerCase().trim();
+    if (normalizedQuery.length < 5) return null;
+    
+    let bestMatch: { content: string; similarity: number } | null = null;
+
+    sessions.forEach(s => {
+      s.messages.forEach((m, idx) => {
+        if (m.role === 'user') {
+          const sim = calculateSimilarity(normalizedQuery, m.content.toLowerCase().trim());
+          if (sim > 0.8) {
+            const nextMsg = s.messages[idx + 1];
+            if (nextMsg && nextMsg.role === 'assistant' && !nextMsg.isStreaming) {
+              if (!bestMatch || sim > bestMatch.similarity) {
+                bestMatch = { content: nextMsg.content, similarity: sim };
+              }
+            }
+          }
+        }
+      });
+    });
+    return bestMatch;
+  };
+
+  const generateAnalysis = (input: string) => {
+    const tokens = input.toLowerCase().split(/\s+/);
+    const intent = tokens.includes('how') || tokens.includes('why') ? 'Explanatory' : 
+                   tokens.includes('create') || tokens.includes('make') || tokens.includes('write') ? 'Creative/Generative' :
+                   tokens.includes('fix') || tokens.includes('code') || tokens.includes('debug') ? 'Technical/Problem Solving' : 'Informational';
+    
+    const depth = tokens.length > 15 ? 'Extensive' : tokens.length > 5 ? 'Moderate' : 'Concise';
+    
+    return JSON.stringify({
+      intent,
+      complexity: tokens.length > 10 ? 'High' : 'Standard',
+      focus: tokens.slice(0, 3).join(' ') + '...',
+      inferredAction: `Processing ${intent.toLowerCase()} request with ${depth.toLowerCase()} output configuration.`
+    }, null, 2);
+  };
+
+  const handleSendMessage = async (overrideInput?: string, useCache?: string) => {
     const finalInput = overrideInput || input;
     if (!finalInput.trim()) return;
     if (isSessionLoading(activeSessionId)) return;
     
     setPendingOptions(null);
+
+    // Cache hit check (only if not an override from a previous choice)
+    if (!overrideInput && !useCache) {
+      const match = findLocalCacheMatch(finalInput);
+      if (match) {
+        setPendingOptions({
+          query: "I found a similar response in your local history. Would you like to reuse it to save tokens?",
+          options: ["Reuse Cached Answer", "Query LLM Anyway"]
+        });
+        // We'll handle the choice in the next call
+        return;
+      }
+    }
+
+    if (useCache) {
+      const match = findLocalCacheMatch(finalInput);
+      if (match) {
+        // Mock a response from cache
+        const sessionId = activeSessionId || generateId();
+        const userMsg: Message = { id: generateId(), role: 'user', content: finalInput, timestamp: Date.now() };
+        const assistantMsg: Message = { 
+          id: generateId(), 
+          role: 'assistant', 
+          content: match.content + "\n\n*(Retrieved from local cache)*", 
+          timestamp: Date.now(),
+          modelUsed: "Local Cache"
+        };
+        
+        setSessions(prev => {
+          const session = prev.find(s => s.id === sessionId);
+          if (session) {
+            return prev.map(s => s.id === sessionId ? { ...s, messages: [...s.messages, userMsg, assistantMsg], updatedAt: Date.now() } : s);
+          }
+          return [...prev, { id: sessionId, title: finalInput.slice(0, 30), messages: [userMsg, assistantMsg], createdAt: Date.now(), updatedAt: Date.now() }];
+        });
+        setActiveSessionId(sessionId);
+        setInput('');
+        return;
+      }
+    }
+
     const provider = getActiveProvider();
 
     if (!provider || !provider.apiKey) {
@@ -338,11 +428,14 @@ export default function App() {
       sessionId = activeSession ? activeSession.id : generateId();
       setLoadingSessions(prev => new Set(prev).add(sessionId!));
       
+      const analysis = generateAnalysis(currentInput);
+
       const userMessage: Message = {
         id: generateId(),
         role: 'user',
         content: currentInput,
-        timestamp: Date.now()
+        timestamp: Date.now(),
+        thoughtProcess: analysis
       };
 
       let updatedSessions = [...sessions];
@@ -375,9 +468,9 @@ export default function App() {
       const model = settings.model || DEFAULT_MODEL;
       const isGemini = provider.baseUrl.includes('generative');
 
-      let sysInstruction = "You are a direct and task-oriented AI assistant. Always provide the required answer immediately without unnecessary context, marketing fluff, or heavy explanations unless explicitly requested. Avoid words like 'bespoke', 'elite', 'luxury', or 'premium'. MANDATORY: If a user's request is ambiguous or requires specific choices to provide a 100% correct result, you MUST wrap exactly 3-5 clarification options in an <options> tag like this: <options>{\"query\": \"Which format did you mean?\", \"options\": [\"Option 1\", \"Option 2\"]}</options>. All data tables must be formatted as Github Flavored Markdown (GFM) tables.";
+      let sysInstruction = "You are a highly efficient AI assistant focused on 100% accuracy and direct utility. \n\nCORE PROTOCOLS:\n1. DIRECTNESS: Provide the requested answer immediately. Skip all introductory phrases, 'luxury' descriptors (elite, bespoke, etc.), and concluding summaries unless they contain essential data.\n2. CLARIFICATION: If a request is broad, ambiguous, or lacks specific parameters (e.g., format, scope, target audience), you MUST pause and ask clarifying questions. Use the <options> format to provide 3-5 distinct paths for the user to choose from to ensure a correct result.\n3. FORMATTING: Wrap clarify options in: <options>{\"query\": \"Clarifying Question?\", \"options\": [\"Option A\", \"Option B\"]}</options>. Use GFM tables for data.\n4. CONCISENESS: Keep explanations minimal and strictly technical unless 'detailed explanation' is requested.";
       if (settings.maxOutputTokens !== undefined && settings.maxOutputTokens > 0) {
-        sysInstruction += ` IMPORTANT: You must strictly adjust and compress your entire answer to fit fully within ${settings.maxOutputTokens} tokens. Do perfectly finish your thoughts and NEVER cut off your response mid-sentence. Be concise.`;
+        sysInstruction += `\n5. TOKEN BUDGET: Strictly fit within ${settings.maxOutputTokens} tokens. Finish thoughts completely.`;
       }
 
       const startTime = Date.now();
@@ -1088,6 +1181,33 @@ export default function App() {
                       {m.content}
                     </ReactMarkdown>
                   </div>
+                  
+                  {m.role === 'user' && m.thoughtProcess && (
+                    <div className="mt-4 pt-4 border-t border-white/10">
+                      <button 
+                        onClick={() => setOpenThoughts(prev => ({ ...prev, [m.id]: !prev[m.id] }))}
+                        className="flex items-center gap-2 text-[10px] font-black uppercase tracking-[0.2em] text-white/50 hover:text-white transition-colors"
+                      >
+                        <ChevronDown size={12} className={`transition-transform ${openThoughts[m.id] ? 'rotate-180' : ''}`} />
+                        Cognitive Insight
+                      </button>
+                      <AnimatePresence>
+                        {openThoughts[m.id] && (
+                          <motion.div
+                            initial={{ height: 0, opacity: 0 }}
+                            animate={{ height: 'auto', opacity: 1 }}
+                            exit={{ height: 0, opacity: 0 }}
+                            className="overflow-hidden"
+                          >
+                            <pre className="mt-3 p-3 bg-black/20 rounded-xl text-[10px] font-mono text-white/70 whitespace-pre-wrap leading-relaxed">
+                              {m.thoughtProcess}
+                            </pre>
+                          </motion.div>
+                        )}
+                      </AnimatePresence>
+                    </div>
+                  )}
+
                   <div className={`flex items-center justify-between mt-5 text-[11px] ${m.role === 'user' ? 'text-white/60' : 'text-[#71717a]'}`}>
                     <span className="font-mono tracking-widest">{new Date(m.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
                     <div className="flex items-center gap-4">
@@ -1104,7 +1224,7 @@ export default function App() {
                        {m.role === 'assistant' && (m.tokenCount || m.isStreaming) && (
                          <span className="flex items-center gap-2 bg-[#111111] px-3 py-1 rounded-full font-black uppercase tracking-tightest text-[9px] text-[#3b82f6] border border-[#111111]">
                            <Sparkles size={10} className={m.isStreaming ? 'animate-pulse' : ''} /> 
-                           {m.isStreaming ? 'Crafting' : `${m.modelUsed ? `${m.modelUsed} | ` : ''}${m.tokenCount} Tokens`}
+                           {m.isStreaming ? 'Computing' : `${m.modelUsed ? `${m.modelUsed} | ` : ''}${m.tokenCount} Tokens`}
                          </span>
                        )}
                     </div>
@@ -1130,7 +1250,7 @@ export default function App() {
                 />
                 <div className="flex flex-col">
                   <span className="text-[10px] font-black uppercase tracking-[0.4em] text-[var(--accent-app)] mb-1">Processing</span>
-                  <span className="text-xs font-bold text-[var(--text-secondary)] italic">iluv is crafting perfection...</span>
+                  <span className="text-xs font-bold text-[var(--text-secondary)] italic">System is calculating response...</span>
                 </div>
                 <motion.div 
                   className="absolute inset-0 bg-gradient-to-r from-transparent via-[var(--accent-app)]/5 to-transparent -translate-x-full"
@@ -1165,7 +1285,15 @@ export default function App() {
                     {pendingOptions.options.map((opt, i) => (
                       <button
                         key={i}
-                        onClick={() => handleSendMessage(opt)}
+                        onClick={() => {
+                          if (opt === "Reuse Cached Answer") {
+                            handleSendMessage(undefined, "true");
+                          } else if (opt === "Query LLM Anyway") {
+                            handleSendMessage(input); // Pass input to skip cache check
+                          } else {
+                            handleSendMessage(opt);
+                          }
+                        }}
                         className="px-4 py-2 bg-[#111111] hover:bg-[#0070f3] text-white text-xs font-bold rounded-lg transition-all border border-white/5 hover:border-[#0070f3]"
                       >
                         {opt}

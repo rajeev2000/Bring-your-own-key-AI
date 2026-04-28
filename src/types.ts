@@ -16,6 +16,7 @@ export interface Message {
   responseTime?: number;
   attachments?: Attachment[];
   isStreaming?: boolean;
+  thoughtProcess?: string;
 }
 
 export interface ChatSession {
