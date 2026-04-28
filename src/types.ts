@@ -26,6 +26,7 @@ export interface ChatSession {
   messages: Message[];
   createdAt: number;
   updatedAt: number;
+  isArchived?: boolean;
 }
 
 export interface ProviderConfig {
@@ -42,6 +43,14 @@ export interface AppSettings {
   model: string;
   temperature?: number;
   maxOutputTokens?: number;
+  themePreset?: 'dark' | 'light' | 'midnight' | 'hacker' | 'custom';
+  customColors?: {
+    bgApp: string;
+    textApp: string;
+    accentApp: string;
+    borderApp: string;
+    cardApp: string;
+  };
 }
 
 export const DEFAULT_MODEL = 'gemini-3-flash-preview';

@@ -30,7 +30,10 @@ import {
   Image as ImageIcon,
   Sliders,
   RefreshCw,
-  Headphones
+  Headphones,
+  Archive,
+  Combine,
+  FolderDown
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import ReactMarkdown from 'react-markdown';
@@ -103,6 +106,8 @@ export default function App() {
   const [loadingSessions, setLoadingSessions] = useState<Set<string>>(new Set());
   const [error, setError] = useState<string | null>(null);
   const [showSettings, setShowSettings] = useState(false);
+  const [showManageSessions, setShowManageSessions] = useState(false);
+  const [selectedSessionIds, setSelectedSessionIds] = useState<Set<string>>(new Set());
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [showParamMenu, setShowParamMenu] = useState(false);
   const [showStrategy, setShowStrategy] = useState(false);
@@ -293,9 +298,66 @@ export default function App() {
   useEffect(() => {
     localStorage.setItem('iluv_settings', JSON.stringify(settings));
     
-    // Enforce dark mode
     const root = window.document.documentElement;
-    root.classList.add('dark');
+    // Apply theme
+    const THEMES: Record<string, Record<string, string>> = {
+      dark: {
+        '--bg-app': '#000000',
+        '--text-app': '#ffffff',
+        '--accent-app': '#0070f3',
+        '--border-app': '#111111',
+        '--card-app': '#0a0a0a',
+        '--text-secondary': '#a1a1aa',
+        'color-scheme': 'dark'
+      },
+      light: {
+        '--bg-app': '#fafafa',
+        '--text-app': '#18181b',
+        '--accent-app': '#0070f3',
+        '--border-app': '#e4e4e7',
+        '--card-app': '#ffffff',
+        '--text-secondary': 'var(--text-secondary)',
+        'color-scheme': 'light'
+      },
+      midnight: {
+        '--bg-app': '#0f172a',
+        '--text-app': '#f1f5f9',
+        '--accent-app': '#38bdf8',
+        '--border-app': '#1e293b',
+        '--card-app': '#0f172a',
+        '--text-secondary': '#94a3b8',
+        'color-scheme': 'dark'
+      },
+      hacker: {
+        '--bg-app': '#000000',
+        '--text-app': '#4ade80',
+        '--accent-app': '#22c55e',
+        '--border-app': '#14532d',
+        '--card-app': '#000000',
+        '--text-secondary': '#bbf7d0',
+        'color-scheme': 'dark'
+      }
+    };
+
+    const preset = settings.themePreset || 'dark';
+    const themeColors = THEMES[preset] || THEMES.dark;
+
+    Object.entries(themeColors).forEach(([key, value]) => {
+      root.style.setProperty(key, value);
+    });
+
+    if (preset === 'custom' && settings.customColors) {
+      if (settings.customColors.bgApp) root.style.setProperty('--bg-app', settings.customColors.bgApp);
+      if (settings.customColors.bgApp) root.style.setProperty('--card-app', settings.customColors.bgApp);
+      if (settings.customColors.textApp) root.style.setProperty('--text-app', settings.customColors.textApp);
+      if (settings.customColors.accentApp) root.style.setProperty('--accent-app', settings.customColors.accentApp);
+    }
+
+    if (preset === 'light') {
+      root.classList.remove('dark');
+    } else {
+      root.classList.add('dark');
+    }
   }, [settings]);
 
   useEffect(() => {
@@ -306,7 +368,59 @@ export default function App() {
 
 
 
-  // --- Helpers ---
+  const handleArchiveSessions = () => {
+    setSessions(prev => prev.map(s => selectedSessionIds.has(s.id) ? { ...s, isArchived: true } : s));
+    setSelectedSessionIds(new Set());
+    setShowManageSessions(false);
+  };
+
+  const handleUnarchiveSessions = () => {
+    setSessions(prev => prev.map(s => selectedSessionIds.has(s.id) ? { ...s, isArchived: false } : s));
+    setSelectedSessionIds(new Set());
+  };
+
+  const handleMergeSessions = () => {
+    if (selectedSessionIds.size < 2) {
+      setError("Please select at least two sessions to merge.");
+      return;
+    }
+    const sessionsToMerge = sessions.filter(s => selectedSessionIds.has(s.id)).sort((a, b) => a.createdAt - b.createdAt);
+    const mergedMessages = sessionsToMerge.flatMap(s => s.messages).sort((a, b) => a.timestamp - b.timestamp);
+    
+    const newSession: ChatSession = {
+      id: generateId(),
+      title: `Merged: ${sessionsToMerge.map(s => s.title).join(', ').slice(0, 30)}...`,
+      messages: mergedMessages,
+      createdAt: sessionsToMerge[0].createdAt,
+      updatedAt: Date.now()
+    };
+    
+    const remainingSessions = sessions.filter(s => !selectedSessionIds.has(s.id));
+    setSessions([newSession, ...remainingSessions]);
+    setSelectedSessionIds(new Set());
+    setShowManageSessions(false);
+  };
+
+  const handleDeleteSelectedSessions = () => {
+    setSessions(prev => prev.filter(s => !selectedSessionIds.has(s.id)));
+    if (activeSessionId && selectedSessionIds.has(activeSessionId)) {
+      setActiveSessionId(null);
+    }
+    setSelectedSessionIds(new Set());
+  };
+
+  const handleExportSelectedSessions = () => {
+    const sessionsToExport = sessions.filter(s => selectedSessionIds.has(s.id));
+    const dataStr = "data:text/json;charset=utf-8," + encodeURIComponent(JSON.stringify(sessionsToExport, null, 2));
+    const a = document.createElement('a');
+    a.href = dataStr;
+    a.download = `iluv_sessions_export_${Date.now()}.json`;
+    a.click();
+    setSelectedSessionIds(new Set());
+  };
+
+  // --- End session management ---
+
   const getActiveSession = () => sessions.find(s => s.id === activeSessionId);
   const isSessionLoading = (id: string | null) => id ? loadingSessions.has(id) : false;
 
@@ -362,6 +476,29 @@ export default function App() {
       });
     });
     return bestMatch;
+  };
+
+  const generateSessionTitle = async (sessionId: string, currentInput: string, provider: any) => {
+    try {
+      if (!provider || !provider.apiKey) return;
+      const ai = new GoogleGenAI({ 
+        apiKey: provider.apiKey,
+        httpOptions: provider.baseUrl !== DEFAULT_BASE_URL ? { baseUrl: provider.baseUrl } : undefined
+      });
+      const response = await ai.models.generateContent({
+        model: 'gemini-3.0-flash', 
+        contents: [{ role: 'user', parts: [{ text: `Generate a short, concise, and accurate 2-4 word title for this chat based on this first message: "${currentInput}". ONLY output the title, no quotes or intro.` }] }]
+      });
+      const generatedTitle = response.text?.trim() || currentInput.slice(0, 30);
+      setSessions(prev => prev.map(s => {
+        if (s.id === sessionId) {
+          return { ...s, title: generatedTitle };
+        }
+        return s;
+      }));
+    } catch (e) {
+      console.warn("Failed to generate session title", e);
+    }
   };
 
   const generateAnalysis = (input: string) => {
@@ -472,6 +609,7 @@ export default function App() {
         updatedSessions = [newSession, ...sessions];
         setSessions(updatedSessions);
         setActiveSessionId(sessionId);
+        generateSessionTitle(sessionId, currentInput, provider);
       } else {
         updatedSessions = sessions.map(s => {
           if (s.id === sessionId) {
@@ -873,77 +1011,58 @@ export default function App() {
     }
   };
 
-  const exportToPDF = () => {
-    const session = getActiveSession();
-    if (!session) return;
-
+  const exportMessageToPDF = (message: Message) => {
     const doc = new jsPDF();
     let y = 10;
     doc.setFontSize(16);
-    doc.text(`iluv Session: ${session.title}`, 10, y);
+    doc.text(`iluv Response: ${new Date(message.timestamp).toLocaleString()}`, 10, y);
     y += 10;
     doc.setFontSize(10);
     
-    session.messages.forEach(m => {
-      const rolePrefix = m.role === 'user' ? 'User: ' : 'iluv: ';
-      // removing json blocks for pdf
-      const content = m.content.replace(/```recharts[\s\S]*?```/g, '[Visualisation omitted in PDF]');
-      const splitText = doc.splitTextToSize(rolePrefix + content, 180);
-      
-      if (y + splitText.length * 5 > 280) {
-        doc.addPage();
-        y = 10;
-      }
-      
-      doc.text(splitText, 10, y);
-      y += (splitText.length * 5) + 5;
-    });
-
-    doc.save(`${session.title.replace(/\s/g, '_')}.pdf`);
+    // removing json blocks for pdf
+    const content = message.content.replace(/```recharts[\s\S]*?```/g, '[Visualisation omitted in PDF]');
+    const splitText = doc.splitTextToSize(content, 180);
+    
+    if (y + splitText.length * 5 > 280) {
+      doc.addPage();
+      y = 10;
+    }
+    
+    doc.text(splitText, 10, y);
+    doc.save(`iluv_Response_${message.id}.pdf`);
   };
 
-  const exportToExcel = () => {
-    const session = getActiveSession();
-    if (!session) return;
-
-    const data = session.messages.map(m => ({
-      Role: m.role,
-      Content: m.content.replace(/```recharts[\s\S]*?```/g, '[Visualisation omitted]'),
-      Timestamp: new Date(m.timestamp).toLocaleString(),
-      Tokens: m.tokenCount || '-',
-      Model: m.modelUsed || 'N/A'
-    }));
+  const exportMessageToExcel = (message: Message) => {
+    const data = [{
+      Role: message.role,
+      Content: message.content.replace(/```recharts[\s\S]*?```/g, '[Visualisation omitted]'),
+      Timestamp: new Date(message.timestamp).toLocaleString(),
+      Tokens: message.tokenCount || '-',
+      Model: message.modelUsed || 'N/A'
+    }];
 
     const ws = XLSX.utils.json_to_sheet(data);
     const wb = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(wb, ws, "Chat History");
-    XLSX.writeFile(wb, `${session.title.replace(/\s/g, '_')}.xlsx`);
+    XLSX.utils.book_append_sheet(wb, ws, "Message");
+    XLSX.writeFile(wb, `iluv_Response_${message.id}.xlsx`);
   };
 
-  const exportToWord = async () => {
-    const session = getActiveSession();
-    if (!session) return;
-
+  const exportMessageToWord = async (message: Message) => {
     const children = [
       new Paragraph({
         children: [
-          new TextRun({ text: `iluv Session: ${session.title}`, bold: true, size: 32 })
+          new TextRun({ text: `iluv Response: ${new Date(message.timestamp).toLocaleString()}`, bold: true, size: 32 })
         ]
       }),
       new Paragraph({ text: "" }) 
     ];
 
-    session.messages.forEach(m => {
-      const rolePrefix = m.role === 'user' ? 'User: ' : 'iluv: ';
-      const content = m.content.replace(/```recharts[\s\S]*?```/g, '[Visualisation omitted]');
-      children.push(new Paragraph({
-        children: [
-          new TextRun({ text: rolePrefix, bold: true }),
-          new TextRun({ text: content })
-        ]
-      }));
-      children.push(new Paragraph({ text: "" }));
-    });
+    const content = message.content.replace(/```recharts[\s\S]*?```/g, '[Visualisation omitted]');
+    children.push(new Paragraph({
+      children: [
+        new TextRun({ text: content })
+      ]
+    }));
 
     const doc = new Document({
       sections: [{
@@ -956,12 +1075,12 @@ export default function App() {
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = `${session.title.replace(/\s/g, '_')}.docx`;
+    a.download = `iluv_Response_${message.id}.docx`;
     a.click();
     URL.revokeObjectURL(url);
   };
 
-  const generatePodcastAudio = async () => {
+  const generatePodcastAudioForMessage = async (message: Message) => {
     const session = getActiveSession();
     const provider = getActiveProvider();
     
@@ -983,7 +1102,7 @@ export default function App() {
           messages: [...s.messages, {
             id: podcastId,
             role: 'assistant',
-            content: '*Generating podcast audio for this session... This might take a few moments.*',
+            content: '*Generating podcast audio script for the requested response... This might take a few moments.*',
             timestamp: Date.now(),
             isStreaming: true
           }]
@@ -999,29 +1118,36 @@ export default function App() {
         httpOptions: activeBaseUrl !== DEFAULT_BASE_URL ? { baseUrl: activeBaseUrl } : undefined
       });
       
-      const prompt = "Summarize the key points of our conversation so far into an engaging 1-minute podcast. Keep it enthusiastic, informative, and speak directly to the listener as a podcast host.";
-      // We take up to last 20 messages to avoid token bloat
-      const historyToSend = session.messages.slice(-20).map(m => ({
-        role: (m.role === 'user' ? 'user' : 'model') as 'user' | 'model',
-        parts: [{ text: m.content }]
-      }));
+      const textPrompt = `Convert the following response into an engaging 1-minute podcast script. Keep it enthusiastic, informative, and speak directly to the listener as a podcast host. ONLY output the script, no introductions.\n\nResponse to convert:\n"""${message.content}"""`;
+      
+      let summaryText = "";
+      try {
+        const summaryResponse = await ai.models.generateContent({
+          model: settings.defaultModelId || 'gemini-3-flash-preview',
+          contents: [{ role: 'user', parts: [{ text: textPrompt }] }]
+        });
+        summaryText = summaryResponse.text || "Welcome to the podcast!";
+      } catch (e: any) {
+         console.warn("Failed to generate summary, using fallback script.", e);
+         summaryText = "Welcome to the podcast. Today we discussed several interesting topics!";
+      }
 
       const response = await ai.models.generateContent({
-        model: 'gemini-2.5-flash',
-        contents: [...historyToSend, { role: 'user', parts: [{ text: prompt }] }],
+        model: 'gemini-3.1-flash-tts-preview',
+        contents: [{ role: 'user', parts: [{ text: summaryText }] }],
         config: {
           responseModalities: ["AUDIO"],
           speechConfig: {
             voiceConfig: {
               prebuiltVoiceConfig: {
-                voiceName: "Aoede" // Podcast-style voice
+                voiceName: "Kore" // Podcast-style voice
               }
             }
           }
         }
       });
 
-      const b64 = response.text;
+      const b64 = response.candidates?.[0]?.content?.parts?.[0]?.inlineData?.data;
       const audioUrl = b64 ? `data:audio/wav;base64,${b64}` : undefined;
 
       setSessions(prev => prev.map(s => {
@@ -1031,7 +1157,7 @@ export default function App() {
             messages: s.messages.map(m => 
               m.id === podcastId ? { 
                 ...m, 
-                content: "Here is your generated podcast summary:", 
+                content: "Here is your generated podcast audio:", 
                 audioUrl: audioUrl,
                 isStreaming: false 
               } : m
@@ -1065,9 +1191,9 @@ export default function App() {
     }
   };
 
-  const generateVisualReport = () => {
-    const request = "Please analyze the chat history above. Determine if there is any numerical, categorical, or temporal data that can be visualized. If there is, summarize it concisely and provide a JSON configuration for a 'recharts' chart of the data inside a ```recharts code block. Ensure the JSON has: type ('bar', 'line', 'pie', 'area'), data (array of objects), xAxisKey (string), series (array of {key, color} objects), and title (string). If no relevant data is found, output a message indicating no visualization could be made.";
-    handleSendMessage(request);
+  const generateVisualReportForMessage = (message: Message) => {
+    const request = `Please analyze this specific message: """${message.content}""". Determine if there is any numerical, categorical, or temporal data that can be visualized. If there is, summarize it concisely and provide a JSON configuration for a 'recharts' chart of the data inside a \`\`\`recharts code block. Ensure the JSON has: type ('bar', 'line', 'pie', 'area'), data (array of objects), xAxisKey (string), series (array of {key, color} objects), and title (string). If no relevant data is found, output a message indicating no visualization could be made.`;
+    handleSendMessage(request, { forceNoHistory: true });
   };
 
   const [copiedId, setCopiedId] = useState<string | null>(null);
@@ -1171,7 +1297,7 @@ export default function App() {
             >
             <div className="p-4 flex items-center justify-between border-b border-[var(--border-app)]">
               <div className="flex items-center gap-2 font-bold tracking-tighter text-xl">
-                <div className="w-9 h-9 rounded-none bg-[var(--accent-app)] flex items-center justify-center text-white shadow-xl">
+                <div className="w-9 h-9 rounded-none bg-[var(--accent-app)] flex items-center justify-center text-[var(--text-app)] shadow-xl">
                   <Sparkles size={22} />
                 </div>
                 <span className="tracking-[0.2em]">iluv</span>
@@ -1195,13 +1321,13 @@ export default function App() {
             </div>
 
             <div className="flex-1 overflow-y-auto p-4 space-y-2 custom-scrollbar">
-              {sessions.map(s => (
+              {sessions.filter(s => !s.isArchived).map(s => (
                 <div 
                   key={s.id}
                   onClick={() => { setActiveSessionId(s.id); setError(null); }}
                   className={`group relative flex items-center gap-3 p-3 rounded-none cursor-pointer transition-all ${
                     activeSessionId === s.id 
-                      ? 'bg-white dark:bg-slate-800 shadow-sm border border-[var(--border-app)]' 
+                      ? 'bg-[var(--card-app)] dark:bg-slate-800 shadow-sm border border-[var(--border-app)]' 
                       : 'hover:bg-slate-200/50 dark:hover:bg-slate-800/50'
                   }`}
                 >
@@ -1224,6 +1350,13 @@ export default function App() {
             </div>
 
             <div className="p-4 border-t border-[var(--border-app)] flex flex-col gap-2 relative">
+              <button 
+                onClick={() => setShowManageSessions(true)}
+                className="flex items-center justify-center gap-2 p-2.5 rounded-none bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 transition-colors text-[11px] font-black uppercase tracking-widest text-[var(--text-app)] w-full shadow-sm"
+              >
+                <Command size={16} />
+                <span>Manage Sessions</span>
+              </button>
               <AnimatePresence>
                 {deferredPrompt && (
                   <motion.div
@@ -1271,16 +1404,16 @@ export default function App() {
               initial={{ opacity: 0, scale: 0.9, y: 20 }}
               animate={{ opacity: 1, scale: 1, y: 0 }}
               exit={{ opacity: 0, scale: 0.9, y: 20 }}
-              className="bg-[#0a0a0a] border border-[#0070f3]/40 rounded-[32px] p-8 sm:p-10 shadow-[0_0_50px_rgba(0,112,243,0.2)] max-w-lg w-full relative overflow-hidden"
+              className="bg-[var(--card-app)] border border-[var(--accent-app)]/40 rounded-[32px] p-8 sm:p-10 shadow-[0_0_50px_rgba(0,112,243,0.2)] max-w-lg w-full relative overflow-hidden"
             >
-              <div className="absolute top-0 left-0 w-full h-1 bg-gradient-to-r from-transparent via-[#0070f3] to-transparent opacity-50" />
+              <div className="absolute top-0 left-0 w-full h-1 bg-gradient-to-r from-transparent via-[var(--accent-app)] to-transparent opacity-50" />
               
               <div className="flex items-center gap-3 mb-6">
-                <div className="w-2 h-2 rounded-full bg-[#0070f3] animate-ping" />
-                <h3 className="text-[10px] font-black text-[#0070f3] uppercase tracking-[0.4em]">System Clarification Required</h3>
+                <div className="w-2 h-2 rounded-full bg-[var(--accent-app)] animate-ping" />
+                <h3 className="text-[10px] font-black text-[var(--accent-app)] uppercase tracking-[0.4em]">System Clarification Required</h3>
               </div>
 
-              <p className="text-xl sm:text-2xl font-bold text-white mb-8 tracking-tight leading-tight">
+              <p className="text-xl sm:text-2xl font-bold text-[var(--text-app)] mb-8 tracking-tight leading-tight">
                 {pendingOptions.query}
               </p>
 
@@ -1297,7 +1430,7 @@ export default function App() {
                         handleSendMessage(opt);
                       }
                     }}
-                    className="group flex items-center justify-between px-6 py-4 bg-[#111111] hover:bg-[#0070f3] text-white rounded-[20px] transition-all border border-white/5 hover:border-[#0070f3] text-left"
+                    className="group flex items-center justify-between px-6 py-4 bg-[var(--border-app)] hover:bg-[var(--accent-app)] text-white rounded-[20px] transition-all border border-[var(--border-app)] hover:border-[var(--accent-app)] text-left"
                   >
                     <span className="font-bold text-sm tracking-wide">{opt}</span>
                     <ChevronRight size={18} className="opacity-0 group-hover:opacity-100 transition-all -translate-x-2 group-hover:translate-x-0" />
@@ -1307,7 +1440,7 @@ export default function App() {
 
               <button
                 onClick={() => setPendingOptions(null)}
-                className="mt-8 w-full py-3 text-[#71717a] text-[10px] font-black uppercase tracking-[0.2em] hover:text-white transition-all"
+                className="mt-8 w-full py-3 text-[var(--text-secondary)] text-[10px] font-black uppercase tracking-[0.2em] hover:text-[var(--text-app)] transition-all"
               >
                 Dismiss Sequence
               </button>
@@ -1322,66 +1455,28 @@ export default function App() {
         {!sidebarOpen && (
           <button 
             onClick={() => setSidebarOpen(true)}
-            className="absolute top-4 left-4 z-40 p-2 bg-[#0a0a0a] border border-[#111111] rounded-full shadow-lg hover:bg-[#111111] transition-all text-[#0070f3]"
+            className="absolute top-4 left-4 z-40 p-2 bg-[var(--card-app)] border border-[var(--border-app)] rounded-full shadow-lg hover:bg-[var(--border-app)] transition-all text-[var(--accent-app)]"
           >
             <ChevronRight size={20} />
           </button>
         )}
 
         {/* Header */}
-        <header className="h-16 flex items-center justify-between px-6 border-b border-[#111111] bg-[#000000]/80 backdrop-blur-md sticky top-0 z-10 transition-all">
+        <header className="h-16 flex items-center justify-between px-6 border-b border-[var(--border-app)] bg-[#000000]/80 backdrop-blur-md sticky top-0 z-10 transition-all">
           <div className="flex items-center gap-3">
              <button 
                 onClick={() => setSidebarOpen(true)}
-                className={`lg:hidden p-2 hover:bg-[#0a0a0a] rounded-full transition-colors ${sidebarOpen ? 'hidden' : ''} text-[#0070f3]`}
+                className={`lg:hidden p-2 hover:bg-[var(--card-app)] rounded-full transition-colors ${sidebarOpen ? 'hidden' : ''} text-[var(--accent-app)]`}
              >
                <Layout size={20} />
              </button>
-             <h1 className="text-lg font-black tracking-[0.2em] truncate scroll-hide max-w-[200px] sm:max-w-md uppercase text-white">
+             <h1 className="text-lg font-black tracking-[0.2em] truncate scroll-hide max-w-[200px] sm:max-w-md uppercase text-[var(--text-app)]">
                {getActiveSession()?.title || 'iluv'}
              </h1>
           </div>
           
           <div className="flex items-center gap-2">
-            {getActiveSession() && (
-              <div className="flex items-center gap-2 bg-slate-100 dark:bg-slate-900 p-1 rounded-none border border-[var(--border-app)] mr-2">
-                <button 
-                  onClick={exportToPDF}
-                  title="Export to PDF"
-                  className="p-2 hover:bg-white dark:hover:bg-slate-800 rounded-none transition-all text-slate-600 dark:text-slate-300"
-                >
-                  <FileText size={18} />
-                </button>
-                <button 
-                  onClick={exportToExcel}
-                  title="Export to Excel"
-                  className="p-2 hover:bg-white dark:hover:bg-slate-800 rounded-none transition-all text-slate-600 dark:text-slate-300"
-                >
-                  <Table size={18} />
-                </button>
-                <button 
-                  onClick={exportToWord}
-                  title="Export to Word"
-                  className="p-2 hover:bg-white dark:hover:bg-slate-800 rounded-none transition-all text-slate-600 dark:text-slate-300"
-                >
-                  <Download size={18} />
-                </button>
-                <button 
-                  onClick={generateVisualReport}
-                  title="Generate Visual Report"
-                  className="p-2 hover:bg-white dark:hover:bg-slate-800 rounded-none transition-all text-slate-600 dark:text-slate-300 border-l border-[var(--border-app)] pl-3 ml-1"
-                >
-                  <BarChartIcon size={18} />
-                </button>
-                <button 
-                  onClick={generatePodcastAudio}
-                  title="Generate Podcast Audio"
-                  className="p-2 hover:bg-white dark:hover:bg-slate-800 rounded-none transition-all text-slate-600 dark:text-slate-300"
-                >
-                  <Headphones size={18} />
-                </button>
-              </div>
-            )}
+            
           </div>
         </header>
 
@@ -1395,12 +1490,12 @@ export default function App() {
               <motion.div 
                 initial={{ scale: 0.8, opacity: 0 }}
                 animate={{ scale: 1, opacity: 1 }}
-                className="w-20 h-20 rounded-full bg-[#0a0a0a] border border-[#0070f3]/20 flex items-center justify-center text-[#0070f3] mb-8 shadow-2xl shadow-[#0070f3]/10"
+                className="w-20 h-20 rounded-full bg-[var(--card-app)] border border-[var(--accent-app)]/20 flex items-center justify-center text-[var(--accent-app)] mb-8 shadow-2xl shadow-[var(--accent-app)]/10"
               >
                 <Sparkles size={40} />
               </motion.div>
-              <h2 className="text-4xl font-black mb-4 tracking-tighter uppercase italic text-white leading-none">iluv</h2>
-              <p className="text-[#71717a] mb-10 font-medium tracking-wide">
+              <h2 className="text-4xl font-black mb-4 tracking-tighter uppercase italic text-[var(--text-app)] leading-none">iluv</h2>
+              <p className="text-[var(--text-secondary)] mb-10 font-medium tracking-wide">
                 Secure. Minimal. Direct. Your private intelligence architecture.
               </p>
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 w-full">
@@ -1413,10 +1508,10 @@ export default function App() {
                   <button 
                     key={idx}
                     onClick={() => setInput(item.cmd)}
-                    className="flex items-center gap-4 p-5 bg-[#0a0a0a] border border-[#111111] rounded-xl hover:border-[#0070f3] hover:bg-[#111111] transition-all text-left group"
+                    className="flex items-center gap-4 p-5 bg-[var(--card-app)] border border-[var(--border-app)] rounded-xl hover:border-[var(--accent-app)] hover:bg-[var(--border-app)] transition-all text-left group"
                   >
-                    <item.icon size={20} className="text-[#0070f3] group-hover:scale-110 transition-transform" />
-                    <span className="text-white font-bold text-sm uppercase tracking-widest">{item.text}</span>
+                    <item.icon size={20} className="text-[var(--accent-app)] group-hover:scale-110 transition-transform" />
+                    <span className="text-[var(--text-app)] font-bold text-sm uppercase tracking-widest">{item.text}</span>
                   </button>
                 ))}
               </div>
@@ -1431,10 +1526,10 @@ export default function App() {
               >
                 <div className={`max-w-[90%] sm:max-w-[80%] group relative ${
                   m.role === 'user' 
-                    ? 'bg-[#0070f3] text-white rounded-3xl rounded-tr-none px-6 py-5 shadow-2xl shadow-[#0070f3]/20' 
-                    : 'bg-[#0a0a0a] border border-[#111111] rounded-3xl rounded-tl-none px-7 py-6 shadow-xl'
+                    ? 'bg-[var(--accent-app)] text-white rounded-3xl rounded-tr-none px-6 py-5 shadow-2xl shadow-[var(--accent-app)]/20' 
+                    : 'bg-[var(--card-app)] border border-[var(--border-app)] rounded-3xl rounded-tl-none px-7 py-6 shadow-xl'
                 }`}>
-                  <div className={`markdown-body ${m.role === 'user' ? 'text-white' : 'text-white'}`}>
+                  <div className={`markdown-body ${m.role === 'user' ? 'text-[var(--text-app)]' : 'text-[var(--text-app)]'}`}>
                     <ReactMarkdown 
                       remarkPlugins={[remarkGfm]}
                       components={{
@@ -1454,8 +1549,8 @@ export default function App() {
                                               : Bar;
                               
                               return (
-                                <div className="my-6 p-4 bg-[#050505] border border-[#111111] rounded-xl shadow-lg h-[350px]">
-                                  <div className="mb-2 text-center text-xs font-bold text-[#0070f3] uppercase tracking-widest">{config.title || "Visualised Report"}</div>
+                                <div className="my-6 p-4 bg-[#050505] border border-[var(--border-app)] rounded-xl shadow-lg h-[350px]">
+                                  <div className="mb-2 text-center text-xs font-bold text-[var(--accent-app)] uppercase tracking-widest">{config.title || "Visualised Report"}</div>
                                   <ResponsiveContainer width="100%" height="100%">
                                     <ChartType data={config.data}>
                                       <CartesianGrid strokeDasharray="3 3" stroke="#222" />
@@ -1468,8 +1563,8 @@ export default function App() {
                                           key={i} 
                                           type="monotone" 
                                           dataKey={s.key} 
-                                          stroke={s.color || "#0070f3"} 
-                                          fill={s.color || "#0070f3"} 
+                                          stroke={s.color || "var(--accent-app)"} 
+                                          fill={s.color || "var(--accent-app)"} 
                                           strokeWidth={2}
                                         />
                                       ))}
@@ -1490,7 +1585,7 @@ export default function App() {
                   </div>
                   
                   {m.audioUrl && (
-                    <div className="mt-4 pt-4 border-t border-[#111111] w-full">
+                    <div className="mt-4 pt-4 border-t border-[var(--border-app)] w-full">
                        <audio controls className="w-full h-10 outline-none" src={m.audioUrl} />
                     </div>
                   )}
@@ -1512,20 +1607,20 @@ export default function App() {
                             exit={{ height: 0, opacity: 0 }}
                             className="overflow-hidden"
                           >
-                            <div className="mt-3 p-4 bg-[#050505] rounded-xl border border-[#111111] shadow-inner">
+                            <div className="mt-3 p-4 bg-[#050505] rounded-xl border border-[var(--border-app)] shadow-inner">
                               <div className="grid grid-cols-2 gap-4 mb-4">
                                 {Object.entries(JSON.parse(m.thoughtProcess)).map(([key, val]) => (
                                   key !== 'inferredAction' && (
                                     <div key={key}>
-                                      <span className="block text-[8px] text-[#71717a] font-black uppercase tracking-widest mb-1">{key}</span>
+                                      <span className="block text-[8px] text-[var(--text-secondary)] font-black uppercase tracking-widest mb-1">{key}</span>
                                       <span className="text-[11px] text-[#3b82f6] font-bold">{String(val)}</span>
                                     </div>
                                   )
                                 ))}
                               </div>
-                              <div className="pt-3 border-t border-[#111111]">
-                                <span className="block text-[8px] text-[#71717a] font-black uppercase tracking-widest mb-1">Execution Strategy</span>
-                                <p className="text-[11px] text-white/70 leading-relaxed italic">
+                              <div className="pt-3 border-t border-[var(--border-app)]">
+                                <span className="block text-[8px] text-[var(--text-secondary)] font-black uppercase tracking-widest mb-1">Execution Strategy</span>
+                                <p className="text-[11px] text-[var(--text-app)]/70 leading-relaxed italic">
                                   {JSON.parse(m.thoughtProcess).inferredAction}
                                 </p>
                               </div>
@@ -1536,21 +1631,61 @@ export default function App() {
                     </div>
                   )}
 
-                  <div className={`flex items-center justify-between mt-5 text-[11px] ${m.role === 'user' ? 'text-white/60' : 'text-[#71717a]'}`}>
+                  <div className={`flex items-center justify-between mt-5 text-[11px] ${m.role === 'user' ? 'text-[var(--text-app)]/60' : 'text-[var(--text-secondary)]'}`}>
                     <span className="font-mono tracking-widest">{new Date(m.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
                     <div className="flex items-center gap-4">
                        <button 
                          onClick={() => copyToClipboard(m.content, m.id)}
                          className={`p-2 rounded-lg transition-all ${
                            m.role === 'user' 
-                             ? 'hover:bg-white/10' 
-                             : 'hover:bg-[#111111]'
+                             ? 'hover:bg-[var(--card-app)]/10' 
+                             : 'hover:bg-[var(--border-app)]'
                          } text-[#3b82f6]`}
+                         title="Copy text"
                        >
                          {copiedId === m.id ? <Check size={12} className="text-green-400" /> : <Copy size={12} />}
                        </button>
+                       {m.role === 'assistant' && (
+                         <>
+                           <button 
+                             onClick={() => exportMessageToPDF(m)}
+                             className="p-2 hover:bg-[var(--border-app)] rounded-lg transition-all text-[#3b82f6]"
+                             title="Export to PDF"
+                           >
+                             <FileText size={12} />
+                           </button>
+                           <button 
+                             onClick={() => exportMessageToExcel(m)}
+                             className="p-2 hover:bg-[var(--border-app)] rounded-lg transition-all text-[#3b82f6]"
+                             title="Export to Excel"
+                           >
+                             <Table size={12} />
+                           </button>
+                           <button 
+                             onClick={() => exportMessageToWord(m)}
+                             className="p-2 hover:bg-[var(--border-app)] rounded-lg transition-all text-[#3b82f6]"
+                             title="Export to Word"
+                           >
+                             <Download size={12} />
+                           </button>
+                           <button 
+                             onClick={() => generateVisualReportForMessage(m)}
+                             className="p-2 hover:bg-[var(--border-app)] rounded-lg transition-all text-[#3b82f6]"
+                             title="Generate Visual Report for this response"
+                           >
+                             <BarChartIcon size={12} />
+                           </button>
+                           <button 
+                             onClick={() => generatePodcastAudioForMessage(m)}
+                             className="p-2 hover:bg-[var(--border-app)] rounded-lg transition-all text-[#3b82f6]"
+                             title="Generate Podcast for this response"
+                           >
+                             <Headphones size={12} />
+                           </button>
+                         </>
+                       )}
                        {m.role === 'assistant' && (m.tokenCount || m.isStreaming) && (
-                         <span className="flex items-center gap-2 bg-[#111111] px-3 py-1 rounded-full font-black uppercase tracking-tightest text-[9px] text-[#3b82f6] border border-[#111111]">
+                         <span className="flex items-center gap-2 bg-[var(--border-app)] px-3 py-1 rounded-full font-black uppercase tracking-tightest text-[9px] text-[#3b82f6] border border-[var(--border-app)]">
                            <Sparkles size={10} className={m.isStreaming ? 'animate-pulse' : ''} /> 
                            {m.isStreaming ? 'Computing' : `${m.modelUsed ? `${m.modelUsed} | ` : ''}${m.tokenCount} Tokens`}
                          </span>
@@ -1597,7 +1732,7 @@ export default function App() {
         </div>
 
         {/* Interraction Area (Input & Controls) */}
-        <div className="relative border-t border-[#111111] bg-[#000000] p-2 sm:p-10 transition-all">
+        <div className="relative border-t border-[var(--border-app)] bg-[#000000] p-2 sm:p-10 transition-all">
           <div className="max-w-5xl mx-auto space-y-4 sm:space-y-6">
             
             <AnimatePresence />
@@ -1609,21 +1744,21 @@ export default function App() {
                     initial={{ opacity: 0, y: 10, scale: 0.98 }}
                     animate={{ opacity: 1, y: 0, scale: 1 }}
                     exit={{ opacity: 0, y: 10, scale: 0.98 }}
-                    className="absolute bottom-full left-0 mb-4 w-[calc(100vw-2rem)] sm:w-80 max-w-sm bg-[#0a0a0a] border border-[#111111] shadow-2xl p-6 sm:p-7 z-50 rounded-3xl backdrop-blur-2xl"
+                    className="absolute bottom-full left-0 mb-4 w-[calc(100vw-2rem)] sm:w-80 max-w-sm bg-[var(--card-app)] border border-[var(--border-app)] shadow-2xl p-6 sm:p-7 z-50 rounded-3xl backdrop-blur-2xl"
                   >
                     <div className="flex justify-between items-center mb-6">
-                      <span className="text-[10px] font-black uppercase tracking-[0.4em] text-[#0070f3]">Strategy Settings</span>
+                      <span className="text-[10px] font-black uppercase tracking-[0.4em] text-[var(--accent-app)]">Strategy Settings</span>
                     </div>
                     <div className="space-y-8">
                        <div className="space-y-3">
-                         <div className="flex justify-between items-center mb-3 text-[10px] font-black uppercase tracking-widest text-[#71717a]">
+                         <div className="flex justify-between items-center mb-3 text-[10px] font-black uppercase tracking-widest text-[var(--text-secondary)]">
                            <label>Model</label>
                            <button 
                              onClick={() => {
                                const provider = getActiveProvider();
                                if (provider) fetchProviderModels(provider);
                              }}
-                             className="text-[9px] font-bold text-[#0070f3] hover:underline uppercase tracking-wide flex items-center gap-1"
+                             className="text-[9px] font-bold text-[var(--accent-app)] hover:underline uppercase tracking-wide flex items-center gap-1"
                            >
                              <RefreshCw size={10} />
                            </button>
@@ -1631,7 +1766,7 @@ export default function App() {
                          <div className="max-h-40 overflow-y-auto custom-scrollbar pr-2 space-y-3">
                            {displayCategories.map(category => (
                              <div key={category}>
-                               <div className="text-[9px] uppercase tracking-widest text-[#71717a] font-bold mb-1 pl-2">{category}</div>
+                               <div className="text-[9px] uppercase tracking-widest text-[var(--text-secondary)] font-bold mb-1 pl-2">{category}</div>
                                <div className="space-y-1">
                                  {displayModels.filter(m => m.category === category).map(m => (
                                    <button
@@ -1640,7 +1775,7 @@ export default function App() {
                                        setSettings(s => ({ ...s, model: m.id }));
                                        setShowParamMenu(false);
                                      }}
-                                     className={`w-full text-left px-3 py-2 rounded-lg text-[11px] font-bold uppercase tracking-[0.1em] transition-colors ${settings.model === m.id ? 'bg-[#0070f3]/10 text-[#0070f3]' : 'text-white hover:bg-[#111111]'}`}
+                                     className={`w-full text-left px-3 py-2 rounded-lg text-[11px] font-bold uppercase tracking-[0.1em] transition-colors ${settings.model === m.id ? 'bg-[var(--accent-app)]/10 text-[var(--accent-app)]' : 'text-[var(--text-app)] hover:bg-[var(--border-app)]'}`}
                                    >
                                      {m.label}
                                    </button>
@@ -1651,7 +1786,7 @@ export default function App() {
                          </div>
                        </div>
                        <div className="space-y-3">
-                         <div className="flex justify-between items-center mb-3 text-[10px] font-black uppercase tracking-widest text-[#71717a]">
+                         <div className="flex justify-between items-center mb-3 text-[10px] font-black uppercase tracking-widest text-[var(--text-secondary)]">
                            <label>Provider</label>
                          </div>
                          <div className="flex flex-wrap gap-2">
@@ -1663,8 +1798,8 @@ export default function App() {
                                }}
                                className={`px-3 py-1.5 rounded-lg text-[9px] font-black uppercase tracking-widest transition-all ${
                                  (settings.activeProviderId === p.id || (!settings.activeProviderId && settings.providers[0]?.id === p.id))
-                                   ? 'bg-[#0070f3] text-white shadow-lg shadow-[#0070f3]/20'
-                                   : 'bg-[#111111] text-[#71717a] hover:text-white border border-white/5'
+                                   ? 'bg-[var(--accent-app)] text-white shadow-lg shadow-[var(--accent-app)]/20'
+                                   : 'bg-[var(--border-app)] text-[var(--text-secondary)] hover:text-[var(--text-app)] border border-[var(--border-app)]'
                                }`}
                              >
                                {p.name}
@@ -1673,9 +1808,9 @@ export default function App() {
                          </div>
                        </div>
                       <div>
-                         <div className="flex justify-between mb-3 text-[10px] font-black uppercase tracking-widest text-[#71717a]">
+                         <div className="flex justify-between mb-3 text-[10px] font-black uppercase tracking-widest text-[var(--text-secondary)]">
                           <label>Logical Depth</label>
-                          <span className="text-[#0070f3] font-mono">{settings.maxOutputTokens || 2048}</span>
+                          <span className="text-[var(--accent-app)] font-mono">{settings.maxOutputTokens || 2048}</span>
                         </div>
                         <input 
                           type="range"
@@ -1686,7 +1821,7 @@ export default function App() {
                           onChange={(e) => setSettings(s => ({ ...s, maxOutputTokens: Number(e.target.value) }))}
                           onMouseUp={() => setTimeout(() => setShowParamMenu(false), 200)}
                           onTouchEnd={() => setTimeout(() => setShowParamMenu(false), 200)}
-                          className="w-full h-1 bg-[#111111] rounded-lg appearance-none cursor-pointer accent-[#0070f3]"
+                          className="w-full h-1 bg-[var(--border-app)] rounded-lg appearance-none cursor-pointer accent-[var(--accent-app)]"
                         />
                       </div>
                     </div>
@@ -1694,11 +1829,11 @@ export default function App() {
                 )}
               </AnimatePresence>
 
-              <div className="flex items-end gap-2 sm:gap-3 bg-[#0a0a0a] border border-[#111111] focus-within:border-[#0070f3] rounded-[24px] sm:rounded-3xl p-2 pl-4 sm:p-5 sm:pl-7 transition-all shadow-2xl ring-1 ring-[#0070f3]/10">
+              <div className="flex items-end gap-2 sm:gap-3 bg-[var(--card-app)] border border-[var(--border-app)] focus-within:border-[var(--accent-app)] rounded-[24px] sm:rounded-3xl p-2 pl-4 sm:p-5 sm:pl-7 transition-all shadow-2xl ring-1 ring-[var(--accent-app)]/10">
                 <div className="flex gap-1 mb-1 sm:mb-1">
                   <button 
                     onClick={() => setShowParamMenu(!showParamMenu)}
-                    className={`p-2 sm:p-3 rounded-xl sm:rounded-2xl transition-all ${showParamMenu ? 'bg-[#0070f3]/10 text-[#0070f3]' : 'hover:bg-[#111111] text-[#71717a] hover:text-[#0070f3]'}`}
+                    className={`p-2 sm:p-3 rounded-xl sm:rounded-2xl transition-all ${showParamMenu ? 'bg-[var(--accent-app)]/10 text-[var(--accent-app)]' : 'hover:bg-[var(--border-app)] text-[var(--text-secondary)] hover:text-[var(--accent-app)]'}`}
                     title="Strategy Settings"
                   >
                     <Sliders size={20} className="sm:w-6 sm:h-6" />
@@ -1720,15 +1855,15 @@ export default function App() {
                   }}
                   placeholder="Initiate sequence..."
                   rows={1}
-                  className="flex-1 max-h-48 sm:max-h-64 bg-transparent border-none focus:ring-0 text-white placeholder-white/20 resize-none py-3 scroll-hide font-semibold text-base sm:text-lg tracking-tight leading-relaxed"
+                  className="flex-1 max-h-48 sm:max-h-64 bg-transparent border-none focus:ring-0 text-[var(--text-app)] placeholder-[var(--text-secondary)] resize-none py-3 scroll-hide font-semibold text-base sm:text-lg tracking-tight leading-relaxed"
                 />
                 <button 
                   onClick={() => handleSendMessage()}
                   disabled={!input.trim() || isSessionLoading(activeSessionId)}
                   className={`p-3 sm:p-4 mb-0.5 sm:mb-1 rounded-xl sm:rounded-2xl transition-all shadow-2xl ${
                     input.trim() 
-                      ? 'bg-[#0070f3] text-white hover:scale-105 active:scale-95 shadow-[#0070f3]/50' 
-                      : 'bg-[#111111] text-[#71717a] opacity-50'
+                      ? 'bg-[var(--accent-app)] text-white hover:scale-105 active:scale-95 shadow-[var(--accent-app)]/50' 
+                      : 'bg-[var(--border-app)] text-[var(--text-secondary)] opacity-50'
                   }`}
                 >
                   <Send size={18} className="sm:w-6 sm:h-6" />
@@ -1736,7 +1871,7 @@ export default function App() {
               </div>
             </div>
           </div>
-          <div className="text-center mt-6 text-[9px] text-[#71717a] uppercase tracking-[0.7em] font-black opacity-40">
+          <div className="text-center mt-6 text-[9px] text-[var(--text-secondary)] uppercase tracking-[0.7em] font-black opacity-40">
             iluv <span className="text-[#3b82f6]">|</span> ARCHITECT OF SECURE INTELLIGENCE
           </div>
         </div>
@@ -1757,7 +1892,7 @@ export default function App() {
               initial={{ opacity: 0, scale: 0.95, y: 20 }}
               animate={{ opacity: 1, scale: 1, y: 0 }}
               exit={{ opacity: 0, scale: 0.95, y: 20 }}
-              className="relative w-full max-w-md bg-white dark:bg-slate-900 rounded-none shadow-2xl p-6 overflow-hidden border border-[var(--border-app)]"
+              className="relative w-full max-w-md bg-[var(--card-app)] dark:bg-slate-900 rounded-none shadow-2xl p-6 overflow-hidden border border-[var(--border-app)]"
             >
               <div className="flex items-center justify-between mb-6">
                 <h3 className="text-xl font-bold uppercase tracking-widest text-[var(--accent-app)]">System Parameters</h3>
@@ -1772,7 +1907,7 @@ export default function App() {
               <div className="space-y-6 max-h-[60vh] overflow-y-auto pr-2 custom-scrollbar">
                 <div className="space-y-4">
                   <div className="flex items-center justify-between">
-                    <span className="text-[10px] font-black uppercase tracking-[0.4em] text-[#0070f3]">Active Intelligence Provider</span>
+                    <span className="text-[10px] font-black uppercase tracking-[0.4em] text-[var(--accent-app)]">Active Intelligence Provider</span>
                   </div>
                   <select
                     value={settings.activeProviderId || settings.providers[0]?.id}
@@ -1787,7 +1922,7 @@ export default function App() {
 
                 <div className="space-y-6 pt-4 border-t border-[var(--border-app)]">
                   <div className="flex items-center justify-between">
-                    <span className="text-[10px] font-black uppercase tracking-[0.4em] text-[#71717a]">Manage Providers</span>
+                    <span className="text-[10px] font-black uppercase tracking-[0.4em] text-[var(--text-secondary)]">Manage Providers</span>
                   </div>
 
                   {settings.providers.map((provider, idx) => (
@@ -1803,7 +1938,7 @@ export default function App() {
                       </div>
                       
                       <div className="space-y-2">
-                        <label className="block text-[9px] font-black uppercase tracking-widest text-[#71717a]">Authentication Key</label>
+                        <label className="block text-[9px] font-black uppercase tracking-widest text-[var(--text-secondary)]">Authentication Key</label>
                         <input 
                           type="password"
                           value={provider.apiKey}
@@ -1813,12 +1948,12 @@ export default function App() {
                             setSettings(s => ({ ...s, providers: newProviders }));
                           }}
                           placeholder="API Key"
-                          className="w-full bg-white dark:bg-slate-900 border border-[var(--border-app)] rounded-none py-2 px-3 focus:outline-none focus:ring-1 focus:ring-[var(--accent-app)] transition-all font-mono text-xs"
+                          className="w-full bg-[var(--card-app)] dark:bg-slate-900 border border-[var(--border-app)] rounded-none py-2 px-3 focus:outline-none focus:ring-1 focus:ring-[var(--accent-app)] transition-all font-mono text-xs"
                         />
                       </div>
 
                       <div className="space-y-2">
-                        <label className="block text-[9px] font-black uppercase tracking-widest text-[#71717a]">Base Endpoint URL</label>
+                        <label className="block text-[9px] font-black uppercase tracking-widest text-[var(--text-secondary)]">Base Endpoint URL</label>
                         <input 
                           value={provider.baseUrl}
                           onChange={(e) => {
@@ -1827,7 +1962,7 @@ export default function App() {
                             setSettings(s => ({ ...s, providers: newProviders }));
                           }}
                           placeholder="https://api.openai.com"
-                          className="w-full bg-white dark:bg-slate-900 border border-[var(--border-app)] rounded-none py-2 px-3 focus:outline-none focus:ring-1 focus:ring-[var(--accent-app)] transition-all font-mono text-[10px]"
+                          className="w-full bg-[var(--card-app)] dark:bg-slate-900 border border-[var(--border-app)] rounded-none py-2 px-3 focus:outline-none focus:ring-1 focus:ring-[var(--accent-app)] transition-all font-mono text-[10px]"
                         />
                       </div>
                     </div>
@@ -1836,13 +1971,13 @@ export default function App() {
 
                 <div className="space-y-6 pt-4 border-t border-[var(--border-app)]">
                   <div className="flex items-center justify-between">
-                     <span className="text-[10px] font-black uppercase tracking-[0.4em] text-[#71717a]">Model Designation</span>
+                     <span className="text-[10px] font-black uppercase tracking-[0.4em] text-[var(--text-secondary)]">Model Designation</span>
                      <button 
                        onClick={() => {
                          const provider = getActiveProvider();
                          if (provider) fetchProviderModels(provider);
                        }}
-                       className="text-[9px] font-bold text-[#0070f3] hover:underline uppercase tracking-wide flex items-center gap-1"
+                       className="text-[9px] font-bold text-[var(--accent-app)] hover:underline uppercase tracking-wide flex items-center gap-1"
                      >
                        <RefreshCw size={10} />
                        Refresh Models
@@ -1866,6 +2001,71 @@ export default function App() {
                     ))}
                   </select>
                 </div>
+
+                <div className="space-y-6 pt-4 border-t border-[var(--border-app)]">
+                  <div className="flex items-center justify-between">
+                     <span className="text-[10px] font-black uppercase tracking-[0.4em] text-[var(--text-secondary)]">Theme Customization</span>
+                  </div>
+
+                  <select
+                    value={settings.themePreset || 'dark'}
+                    onChange={(e) => {
+                      const newSettings = { ...settings, themePreset: e.target.value as any };
+                      if (e.target.value !== 'custom') {
+                        delete newSettings.customColors;
+                      } else {
+                        newSettings.customColors = {
+                          bgApp: '#000000',
+                          textApp: '#ffffff',
+                          accentApp: 'var(--accent-app)',
+                          borderApp: 'var(--border-app)',
+                          cardApp: 'var(--card-app)',
+                        };
+                      }
+                      setSettings(newSettings);
+                    }}
+                    className="w-full mb-4 bg-slate-50 dark:bg-slate-800 border border-[var(--border-app)] rounded-none py-3 px-4 focus:outline-none focus:ring-1 focus:ring-[var(--accent-app)] transition-all font-mono text-sm text-[var(--accent-app)]"
+                  >
+                     <option value="dark">Dark (Default)</option>
+                     <option value="light">Light</option>
+                     <option value="midnight">Midnight</option>
+                     <option value="hacker">Hacker</option>
+                     <option value="custom">Custom</option>
+                  </select>
+
+                  {settings.themePreset === 'custom' && settings.customColors && (
+                    <div className="p-4 bg-slate-50 dark:bg-slate-800/50 border border-[var(--border-app)] space-y-4">
+                      <div className="flex items-center justify-between">
+                         <label className="block text-[9px] font-black uppercase tracking-widest text-[var(--text-secondary)]">Background Color</label>
+                         <input 
+                           type="color"
+                           value={settings.customColors.bgApp}
+                           onChange={(e) => setSettings({ ...settings, customColors: { ...settings.customColors!, bgApp: e.target.value } })}
+                           className="bg-transparent border-none cursor-pointer p-0 h-6 w-10 flex-shrink-0"
+                         />
+                      </div>
+                      <div className="flex items-center justify-between">
+                         <label className="block text-[9px] font-black uppercase tracking-widest text-[var(--text-secondary)]">Text Color</label>
+                         <input 
+                           type="color"
+                           value={settings.customColors.textApp}
+                           onChange={(e) => setSettings({ ...settings, customColors: { ...settings.customColors!, textApp: e.target.value } })}
+                           className="bg-transparent border-none cursor-pointer p-0 h-6 w-10 flex-shrink-0"
+                         />
+                      </div>
+                      <div className="flex items-center justify-between">
+                         <label className="block text-[9px] font-black uppercase tracking-widest text-[var(--text-secondary)]">Accent Color</label>
+                         <input 
+                           type="color"
+                           value={settings.customColors.accentApp}
+                           onChange={(e) => setSettings({ ...settings, customColors: { ...settings.customColors!, accentApp: e.target.value } })}
+                           className="bg-transparent border-none cursor-pointer p-0 h-6 w-10 flex-shrink-0"
+                         />
+                      </div>
+                    </div>
+                  )}
+                </div>
+
               </div>
 
               <div className="mt-8 pt-6 border-t border-[var(--border-app)] relative group">
@@ -1876,6 +2076,108 @@ export default function App() {
                   <span className="relative z-10">Commit Changes</span>
                 </button>
               </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
+      {/* Manage Sessions Modal */}
+      <AnimatePresence>
+        {showManageSessions && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+            <motion.div 
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              className="absolute inset-0 bg-black/60 backdrop-blur-sm"
+              onClick={() => setShowManageSessions(false)}
+            />
+            <motion.div 
+              initial={{ scale: 0.95, opacity: 0, y: 20 }}
+              animate={{ scale: 1, opacity: 1, y: 0 }}
+              exit={{ scale: 0.95, opacity: 0, y: 20 }}
+              className="bg-[var(--bg-app)] border border-[var(--border-app)] rounded-none p-6 sm:p-8 max-w-3xl w-full relative z-10 shadow-2xl max-h-[80vh] flex flex-col"
+            >
+              <div className="flex justify-between items-center mb-8 border-b border-[var(--border-app)] pb-4">
+                <div className="flex flex-col gap-1">
+                  <h2 className="text-xl font-black uppercase tracking-widest text-[var(--text-app)] flex items-center gap-3">
+                    <Command className="text-[var(--accent-app)]" /> Session Management
+                  </h2>
+                </div>
+                <button 
+                  onClick={() => setShowManageSessions(false)}
+                  className="p-2 hover:bg-slate-200 dark:hover:bg-slate-800 rounded-none transition-colors text-[var(--text-app)]"
+                >
+                  <X size={20} />
+                </button>
+              </div>
+
+              <div className="flex-1 overflow-y-auto mb-6 custom-scrollbar pr-2 space-y-2">
+                {sessions.map(s => (
+                  <div key={s.id} className="flex items-center gap-3 p-3 bg-slate-100 dark:bg-[var(--border-app)] border border-[var(--border-app)]">
+                    <input 
+                      type="checkbox"
+                      checked={selectedSessionIds.has(s.id)}
+                      onChange={(e) => {
+                        const next = new Set(selectedSessionIds);
+                        if (e.target.checked) next.add(s.id);
+                        else next.delete(s.id);
+                        setSelectedSessionIds(next);
+                      }}
+                      className="w-4 h-4 rounded-none accent-[var(--accent-app)] bg-transparent border-[var(--border-app)]"
+                    />
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center gap-2">
+                        <span className="font-bold truncate text-[var(--text-app)]">{s.title}</span>
+                        {s.isArchived && <span className="px-2 py-0.5 bg-yellow-500/10 text-yellow-500 text-[9px] uppercase font-black uppercase rounded-full">Archived</span>}
+                      </div>
+                      <div className="text-[10px] text-[var(--text-secondary)] mt-1">{new Date(s.createdAt).toLocaleString()} • {s.messages.length} messages</div>
+                    </div>
+                  </div>
+                ))}
+                {sessions.length === 0 && (
+                  <div className="text-center text-[var(--text-secondary)] py-8 font-medium">No sessions found.</div>
+                )}
+              </div>
+
+              <div className="border-t border-[var(--border-app)] pt-6 flex flex-wrap gap-3">
+                <button
+                  onClick={handleArchiveSessions}
+                  disabled={selectedSessionIds.size === 0}
+                  className="flex-1 flex items-center justify-center gap-2 px-4 py-3 bg-[var(--card-app)] hover:bg-slate-200 dark:hover:bg-slate-800 border border-[var(--border-app)] uppercase tracking-widest text-[10px] font-black disabled:opacity-50 transition-all text-[var(--text-app)]"
+                >
+                  <Archive size={14} /> Archive
+                </button>
+                <button
+                  onClick={handleUnarchiveSessions}
+                  disabled={selectedSessionIds.size === 0}
+                  className="flex-1 flex items-center justify-center gap-2 px-4 py-3 bg-[var(--card-app)] hover:bg-slate-200 dark:hover:bg-slate-800 border border-[var(--border-app)] uppercase tracking-widest text-[10px] font-black disabled:opacity-50 transition-all text-[var(--text-app)]"
+                >
+                  <Archive size={14} className="rotate-180" /> Unarchive
+                </button>
+                <button
+                  onClick={handleMergeSessions}
+                  disabled={selectedSessionIds.size < 2}
+                  className="flex-1 flex items-center justify-center gap-2 px-4 py-3 bg-[var(--card-app)] hover:bg-slate-200 dark:hover:bg-slate-800 border border-[var(--border-app)] uppercase tracking-widest text-[10px] font-black disabled:opacity-50 transition-all text-[var(--text-app)]"
+                >
+                  <Combine size={14} /> Merge ({selectedSessionIds.size})
+                </button>
+                <button
+                  onClick={handleExportSelectedSessions}
+                  disabled={selectedSessionIds.size === 0}
+                  className="flex-1 flex items-center justify-center gap-2 px-4 py-3 bg-[var(--card-app)] hover:bg-slate-200 dark:hover:bg-slate-800 border border-[var(--border-app)] uppercase tracking-widest text-[10px] font-black disabled:opacity-50 transition-all text-[var(--text-app)]"
+                >
+                  <FolderDown size={14} /> Export JSON
+                </button>
+                <button
+                  onClick={handleDeleteSelectedSessions}
+                  disabled={selectedSessionIds.size === 0}
+                  className="w-full mt-2 flex items-center justify-center gap-2 px-4 py-3 bg-red-500/10 hover:bg-red-500/20 border border-red-500/30 text-red-500 uppercase tracking-widest text-[10px] font-black disabled:opacity-50 transition-all"
+                >
+                  <Trash2 size={14} /> Delete Selected
+                </button>
+              </div>
+
             </motion.div>
           </div>
         )}
