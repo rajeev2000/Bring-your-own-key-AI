@@ -16,6 +16,7 @@ import {
   Table, 
   FileText, 
   Download, 
+  BarChart as BarChartIcon,
   ExternalLink,
   ChevronRight,
   ChevronDown,
@@ -34,6 +35,10 @@ import { motion, AnimatePresence } from 'motion/react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { GoogleGenAI } from '@google/genai';
+import { jsPDF } from 'jspdf';
+import * as XLSX from 'xlsx';
+import { Document, Packer, Paragraph, TextRun } from 'docx';
+import { LineChart, Line, BarChart, Bar, PieChart, Pie, AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip as RechartsTooltip, Legend, ResponsiveContainer } from 'recharts';
 
 import { Message, ChatSession, AppSettings, DEFAULT_MODEL, DEFAULT_BASE_URL } from './types';
 
@@ -867,6 +872,99 @@ export default function App() {
     }
   };
 
+  const exportToPDF = () => {
+    const session = getActiveSession();
+    if (!session) return;
+
+    const doc = new jsPDF();
+    let y = 10;
+    doc.setFontSize(16);
+    doc.text(`iluv Session: ${session.title}`, 10, y);
+    y += 10;
+    doc.setFontSize(10);
+    
+    session.messages.forEach(m => {
+      const rolePrefix = m.role === 'user' ? 'User: ' : 'iluv: ';
+      // removing json blocks for pdf
+      const content = m.content.replace(/```recharts[\s\S]*?```/g, '[Visualisation omitted in PDF]');
+      const splitText = doc.splitTextToSize(rolePrefix + content, 180);
+      
+      if (y + splitText.length * 5 > 280) {
+        doc.addPage();
+        y = 10;
+      }
+      
+      doc.text(splitText, 10, y);
+      y += (splitText.length * 5) + 5;
+    });
+
+    doc.save(`${session.title.replace(/\s/g, '_')}.pdf`);
+  };
+
+  const exportToExcel = () => {
+    const session = getActiveSession();
+    if (!session) return;
+
+    const data = session.messages.map(m => ({
+      Role: m.role,
+      Content: m.content.replace(/```recharts[\s\S]*?```/g, '[Visualisation omitted]'),
+      Timestamp: new Date(m.timestamp).toLocaleString(),
+      Tokens: m.tokenCount || '-',
+      Model: m.modelUsed || 'N/A'
+    }));
+
+    const ws = XLSX.utils.json_to_sheet(data);
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, "Chat History");
+    XLSX.writeFile(wb, `${session.title.replace(/\s/g, '_')}.xlsx`);
+  };
+
+  const exportToWord = async () => {
+    const session = getActiveSession();
+    if (!session) return;
+
+    const children = [
+      new Paragraph({
+        children: [
+          new TextRun({ text: `iluv Session: ${session.title}`, bold: true, size: 32 })
+        ]
+      }),
+      new Paragraph({ text: "" }) 
+    ];
+
+    session.messages.forEach(m => {
+      const rolePrefix = m.role === 'user' ? 'User: ' : 'iluv: ';
+      const content = m.content.replace(/```recharts[\s\S]*?```/g, '[Visualisation omitted]');
+      children.push(new Paragraph({
+        children: [
+          new TextRun({ text: rolePrefix, bold: true }),
+          new TextRun({ text: content })
+        ]
+      }));
+      children.push(new Paragraph({ text: "" }));
+    });
+
+    const doc = new Document({
+      sections: [{
+        properties: {},
+        children
+      }]
+    });
+
+    const blob = await Packer.toBlob(doc);
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `${session.title.replace(/\s/g, '_')}.docx`;
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+
+  const generateVisualReport = () => {
+    const request = "Please analyze the chat history above. Determine if there is any numerical, categorical, or temporal data that can be visualized. If there is, summarize it concisely and provide a JSON configuration for a 'recharts' chart of the data inside a ```recharts code block. Ensure the JSON has: type ('bar', 'line', 'pie', 'area'), data (array of objects), xAxisKey (string), series (array of {key, color} objects), and title (string). If no relevant data is found, output a message indicating no visualization could be made.";
+    handleSendMessage(request);
+  };
+
   const [copiedId, setCopiedId] = useState<string | null>(null);
 
   const copyToClipboard = (text: string, id: string) => {
@@ -1140,6 +1238,38 @@ export default function App() {
           </div>
           
           <div className="flex items-center gap-2">
+            {getActiveSession() && (
+              <div className="flex items-center gap-2 bg-slate-100 dark:bg-slate-900 p-1 rounded-none border border-[var(--border-app)] mr-2">
+                <button 
+                  onClick={exportToPDF}
+                  title="Export to PDF"
+                  className="p-2 hover:bg-white dark:hover:bg-slate-800 rounded-none transition-all text-slate-600 dark:text-slate-300"
+                >
+                  <FileText size={18} />
+                </button>
+                <button 
+                  onClick={exportToExcel}
+                  title="Export to Excel"
+                  className="p-2 hover:bg-white dark:hover:bg-slate-800 rounded-none transition-all text-slate-600 dark:text-slate-300"
+                >
+                  <Table size={18} />
+                </button>
+                <button 
+                  onClick={exportToWord}
+                  title="Export to Word"
+                  className="p-2 hover:bg-white dark:hover:bg-slate-800 rounded-none transition-all text-slate-600 dark:text-slate-300"
+                >
+                  <Download size={18} />
+                </button>
+                <button 
+                  onClick={generateVisualReport}
+                  title="Generate Visual Report"
+                  className="p-2 hover:bg-white dark:hover:bg-slate-800 rounded-none transition-all text-slate-600 dark:text-slate-300 border-l border-[var(--border-app)] pl-3 ml-1"
+                >
+                  <BarChartIcon size={18} />
+                </button>
+              </div>
+            )}
           </div>
         </header>
 
@@ -1163,7 +1293,7 @@ export default function App() {
               </p>
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 w-full">
                 {[
-                  { icon: Table, text: "Data Visualisation", cmd: "Generate a markdown table for global tech analysis" },
+                  { icon: Table, text: "Data Visualisation", cmd: "Generate a markdown table for a 5-year global tech revenue analysis, then provide a JSON configuration for a 'recharts' bar chart of the data inside a ```recharts code block. Ensure the JSON has: type ('bar'), data (array of objects), xAxisKey (string), and series (array of {key, color} objects)." },
                   { icon: Layout, text: "Strategic Roadmap", cmd: "Create a 3-month strategic plan for a boutique startup" },
                   { icon: Command, text: "System Synthesis", cmd: "Explain the core mechanics of privacy-focused AI" },
                   { icon: FileText, text: "Technical Drafting", cmd: "Draft a concise executive report on market trends" }
@@ -1193,7 +1323,56 @@ export default function App() {
                     : 'bg-[#0a0a0a] border border-[#111111] rounded-3xl rounded-tl-none px-7 py-6 shadow-xl'
                 }`}>
                   <div className={`markdown-body ${m.role === 'user' ? 'text-white' : 'text-white'}`}>
-                    <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                    <ReactMarkdown 
+                      remarkPlugins={[remarkGfm]}
+                      components={{
+                        code({node, inline, className, children, ...props}: any) {
+                          const match = /language-(\w+)/.exec(className || '')
+                          const lang = match ? match[1] : '';
+                          if (!inline && lang === 'recharts') {
+                            try {
+                              const config = JSON.parse(String(children).replace(/\n$/, ''));
+                              const ChartType = config.type === 'line' ? LineChart 
+                                              : config.type === 'pie' ? PieChart 
+                                              : config.type === 'area' ? AreaChart
+                                              : BarChart;
+                              const DataComponent: any = config.type === 'line' ? Line 
+                                              : config.type === 'pie' ? Pie 
+                                              : config.type === 'area' ? Area
+                                              : Bar;
+                              
+                              return (
+                                <div className="my-6 p-4 bg-[#050505] border border-[#111111] rounded-xl shadow-lg h-[350px]">
+                                  <div className="mb-2 text-center text-xs font-bold text-[#0070f3] uppercase tracking-widest">{config.title || "Visualised Report"}</div>
+                                  <ResponsiveContainer width="100%" height="100%">
+                                    <ChartType data={config.data}>
+                                      <CartesianGrid strokeDasharray="3 3" stroke="#222" />
+                                      <XAxis dataKey={config.xAxisKey} stroke="#888" fontSize={12} tickLine={false} axisLine={false} />
+                                      <YAxis stroke="#888" fontSize={12} tickLine={false} axisLine={false} />
+                                      <RechartsTooltip contentStyle={{ backgroundColor: '#111', borderColor: '#333', color: '#fff', borderRadius: '8px' }} />
+                                      <Legend wrapperStyle={{ fontSize: '12px', paddingTop: '10px' }} />
+                                      {config.series.map((s: any, i: number) => (
+                                        <DataComponent 
+                                          key={i} 
+                                          type="monotone" 
+                                          dataKey={s.key} 
+                                          stroke={s.color || "#0070f3"} 
+                                          fill={s.color || "#0070f3"} 
+                                          strokeWidth={2}
+                                        />
+                                      ))}
+                                    </ChartType>
+                                  </ResponsiveContainer>
+                                </div>
+                              );
+                            } catch (e) {
+                              return <div className="text-red-500 text-xs my-4 p-4 border border-red-500/30 rounded bg-red-500/10">Failed to render chart: Invalid JSON configuration</div>;
+                            }
+                          }
+                          return <code className={className} {...props}>{children}</code>
+                        }
+                      }}
+                    >
                       {m.content}
                     </ReactMarkdown>
                   </div>

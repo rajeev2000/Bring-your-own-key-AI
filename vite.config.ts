@@ -11,6 +11,9 @@ export default defineConfig(({mode}) => {
       react(), 
       VitePWA({
         registerType: 'autoUpdate',
+        workbox: {
+          maximumFileSizeToCacheInBytes: 10 * 1024 * 1024 // 10MB
+        },
         manifest: {
           name: 'iluv',
           short_name: 'iluv',
