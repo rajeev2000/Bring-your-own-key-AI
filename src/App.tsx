@@ -1631,60 +1631,36 @@ export default function App() {
                     </div>
                   )}
 
-                  <div className={`flex items-center justify-between mt-5 text-[11px] ${m.role === 'user' ? 'text-[var(--text-app)]/60' : 'text-[var(--text-secondary)]'}`}>
-                    <span className="font-mono tracking-widest">{new Date(m.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
-                    <div className="flex items-center gap-4">
-                       <button 
-                         onClick={() => copyToClipboard(m.content, m.id)}
-                         className={`p-2 rounded-lg transition-all ${
-                           m.role === 'user' 
-                             ? 'hover:bg-[var(--card-app)]/10' 
-                             : 'hover:bg-[var(--border-app)]'
-                         } text-[#3b82f6]`}
-                         title="Copy text"
-                       >
-                         {copiedId === m.id ? <Check size={12} className="text-green-400" /> : <Copy size={12} />}
-                       </button>
-                       {m.role === 'assistant' && (
-                         <>
-                           <button 
-                             onClick={() => exportMessageToPDF(m)}
-                             className="p-2 hover:bg-[var(--border-app)] rounded-lg transition-all text-[#3b82f6]"
-                             title="Export to PDF"
-                           >
-                             <FileText size={12} />
-                           </button>
-                           <button 
-                             onClick={() => exportMessageToExcel(m)}
-                             className="p-2 hover:bg-[var(--border-app)] rounded-lg transition-all text-[#3b82f6]"
-                             title="Export to Excel"
-                           >
-                             <Table size={12} />
-                           </button>
-                           <button 
-                             onClick={() => exportMessageToWord(m)}
-                             className="p-2 hover:bg-[var(--border-app)] rounded-lg transition-all text-[#3b82f6]"
-                             title="Export to Word"
-                           >
-                             <Download size={12} />
-                           </button>
-                           <button 
-                             onClick={() => generateVisualReportForMessage(m)}
-                             className="p-2 hover:bg-[var(--border-app)] rounded-lg transition-all text-[#3b82f6]"
-                             title="Generate Visual Report for this response"
-                           >
-                             <BarChartIcon size={12} />
-                           </button>
-                           <button 
-                             onClick={() => generatePodcastAudioForMessage(m)}
-                             className="p-2 hover:bg-[var(--border-app)] rounded-lg transition-all text-[#3b82f6]"
-                             title="Generate Podcast for this response"
-                           >
-                             <Headphones size={12} />
-                           </button>
-                         </>
-                       )}
-                       {m.role === 'assistant' && (m.tokenCount || m.isStreaming) && (
+                   <div className={`flex items-center justify-between mt-5 text-[11px] ${m.role === 'user' ? 'text-[var(--text-app)]/60' : 'text-[var(--text-secondary)]'}`}>
+                     <span className="font-mono tracking-widest">{new Date(m.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
+                     <div className="flex items-center gap-2">
+                        <button 
+                          onClick={() => copyToClipboard(m.content, m.id)}
+                          className={`p-2 rounded-lg transition-all ${
+                            m.role === 'user' 
+                              ? 'hover:bg-[var(--card-app)]/10' 
+                              : 'hover:bg-[var(--border-app)]'
+                          } text-[var(--accent-app)]`}
+                          title="Copy text"
+                        >
+                          {copiedId === m.id ? <Check size={12} className="text-green-500" /> : <Copy size={12} />}
+                        </button>
+                        {m.role === 'assistant' && (
+                          m.content.includes('```recharts') ? (
+                            <button onClick={() => generateVisualReportForMessage(m)} className="px-3 py-1.5 hover:bg-[var(--border-app)] rounded-lg transition-all text-[var(--accent-app)] font-bold uppercase tracking-widest text-[9px] border border-[var(--accent-app)]/20">
+                              Download Chart
+                            </button>
+                          ) : m.content.includes('|') && m.content.includes('---') ? (
+                            <button onClick={() => exportMessageToExcel(m)} className="px-3 py-1.5 hover:bg-[var(--border-app)] rounded-lg transition-all text-[var(--accent-app)] font-bold uppercase tracking-widest text-[9px] border border-[var(--accent-app)]/20">
+                              Download Excel
+                            </button>
+                          ) : (
+                            <button onClick={() => exportMessageToPDF(m)} className="px-3 py-1.5 hover:bg-[var(--border-app)] rounded-lg transition-all text-[var(--accent-app)] font-bold uppercase tracking-widest text-[9px] border border-[var(--accent-app)]/20">
+                              Download PDF
+                            </button>
+                          )
+                        )}
+                        {m.role === 'assistant' && (m.tokenCount || m.isStreaming) && (
                          <span className="flex items-center gap-2 bg-[var(--border-app)] px-3 py-1 rounded-full font-black uppercase tracking-tightest text-[9px] text-[#3b82f6] border border-[var(--border-app)]">
                            <Sparkles size={10} className={m.isStreaming ? 'animate-pulse' : ''} /> 
                            {m.isStreaming ? 'Computing' : `${m.modelUsed ? `${m.modelUsed} | ` : ''}${m.tokenCount} Tokens`}
