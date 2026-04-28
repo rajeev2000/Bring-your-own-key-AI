@@ -479,26 +479,31 @@ export default function App() {
   };
 
   const generateSessionTitle = async (sessionId: string, currentInput: string, provider: any) => {
+    let generatedTitle = currentInput.slice(0, 30) + (currentInput.length > 30 ? '...' : '');
     try {
-      if (!provider || !provider.apiKey) return;
-      const ai = new GoogleGenAI({ 
-        apiKey: provider.apiKey,
-        httpOptions: provider.baseUrl !== DEFAULT_BASE_URL ? { baseUrl: provider.baseUrl } : undefined
-      });
-      const response = await ai.models.generateContent({
-        model: 'gemini-3.0-flash', 
-        contents: [{ role: 'user', parts: [{ text: `Generate a short, concise, and accurate 2-4 word title for this chat based on this first message: "${currentInput}". ONLY output the title, no quotes or intro.` }] }]
-      });
-      const generatedTitle = response.text?.trim() || currentInput.slice(0, 30);
-      setSessions(prev => prev.map(s => {
-        if (s.id === sessionId) {
-          return { ...s, title: generatedTitle };
+      if (provider && provider.apiKey && provider.baseUrl.includes('generative')) {
+        const ai = new GoogleGenAI({ 
+          apiKey: provider.apiKey,
+          httpOptions: provider.baseUrl !== DEFAULT_BASE_URL ? { baseUrl: provider.baseUrl } : undefined
+        });
+        const response = await ai.models.generateContent({
+          model: settings.model || 'gemini-2.5-flash', 
+          contents: [{ role: 'user', parts: [{ text: `Generate a short, concise, and accurate 2-4 word title for this chat based on this first message: "${currentInput}". ONLY output the title, no quotes or intro.` }] }]
+        });
+        if (response.text?.trim()) {
+          generatedTitle = response.text.trim();
         }
-        return s;
-      }));
+      }
     } catch (e) {
-      console.warn("Failed to generate session title", e);
+      console.warn("Failed to generate session title via AI, using fallback.", e);
     }
+
+    setSessions(prev => prev.map(s => {
+      if (s.id === sessionId) {
+        return { ...s, title: generatedTitle };
+      }
+      return s;
+    }));
   };
 
   const generateAnalysis = (input: string) => {
@@ -1123,7 +1128,7 @@ export default function App() {
       let summaryText = "";
       try {
         const summaryResponse = await ai.models.generateContent({
-          model: settings.defaultModelId || 'gemini-3-flash-preview',
+          model: settings.model || 'gemini-3-flash-preview',
           contents: [{ role: 'user', parts: [{ text: textPrompt }] }]
         });
         summaryText = summaryResponse.text || "Welcome to the podcast!";
@@ -1193,7 +1198,7 @@ export default function App() {
 
   const generateVisualReportForMessage = (message: Message) => {
     const request = `Please analyze this specific message: """${message.content}""". Determine if there is any numerical, categorical, or temporal data that can be visualized. If there is, summarize it concisely and provide a JSON configuration for a 'recharts' chart of the data inside a \`\`\`recharts code block. Ensure the JSON has: type ('bar', 'line', 'pie', 'area'), data (array of objects), xAxisKey (string), series (array of {key, color} objects), and title (string). If no relevant data is found, output a message indicating no visualization could be made.`;
-    handleSendMessage(request, { forceNoHistory: true });
+    handleSendMessage(request, "ignore-cache");
   };
 
   const [copiedId, setCopiedId] = useState<string | null>(null);
@@ -1522,7 +1527,7 @@ export default function App() {
                 initial={{ opacity: 0, y: 10 }}
                 animate={{ opacity: 1, y: 0 }}
                 key={m.id}
-                className={`flex ${m.role === 'user' ? 'justify-end' : 'justify-start'}`}
+                className={`flex flex-col w-full ${m.role === 'user' ? 'items-end' : 'items-start'}`}
               >
                 <div className={`max-w-[90%] sm:max-w-[80%] group relative ${
                   m.role === 'user' 
@@ -1631,9 +1636,9 @@ export default function App() {
                     </div>
                   )}
 
-                   <div className={`flex items-center justify-between mt-5 text-[11px] ${m.role === 'user' ? 'text-[var(--text-app)]/60' : 'text-[var(--text-secondary)]'}`}>
-                     <span className="font-mono tracking-widest">{new Date(m.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
-                     <div className="flex items-center gap-2">
+                   <div className={`flex flex-wrap items-center justify-between gap-y-2 mt-5 text-[11px] ${m.role === 'user' ? 'text-[var(--text-app)]/60' : 'text-[var(--text-secondary)]'}`}>
+                     <span className="font-mono tracking-widest whitespace-nowrap">{new Date(m.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
+                     <div className="flex items-center gap-2 flex-wrap justify-end">
                         <button 
                           onClick={() => copyToClipboard(m.content, m.id)}
                           className={`p-2 rounded-lg transition-all ${
@@ -1660,15 +1665,17 @@ export default function App() {
                             </button>
                           )
                         )}
-                        {m.role === 'assistant' && (m.tokenCount || m.isStreaming) && (
-                         <span className="flex items-center gap-2 bg-[var(--border-app)] px-3 py-1 rounded-full font-black uppercase tracking-tightest text-[9px] text-[#3b82f6] border border-[var(--border-app)]">
-                           <Sparkles size={10} className={m.isStreaming ? 'animate-pulse' : ''} /> 
-                           {m.isStreaming ? 'Computing' : `${m.modelUsed ? `${m.modelUsed} | ` : ''}${m.tokenCount} Tokens`}
-                         </span>
-                       )}
                     </div>
                   </div>
                 </div>
+                {m.role === 'assistant' && (m.tokenCount || m.isStreaming) && (
+                  <div className="mt-2 ml-4">
+                    <span className="inline-flex items-center gap-2 bg-transparent px-2 py-1 rounded-full font-black uppercase tracking-widest text-[9px] text-[var(--text-secondary)] border border-transparent hover:border-[var(--border-app)] hover:bg-[var(--card-app)] transition-all cursor-default">
+                      <Sparkles size={10} className={`text-[var(--accent-app)] ${m.isStreaming ? 'animate-pulse' : ''}`} /> 
+                      {m.isStreaming ? 'Computing...' : `${m.modelUsed ? `${m.modelUsed} | ` : ''}${m.tokenCount} Tokens`}
+                    </span>
+                  </div>
+                )}
               </motion.div>
             ))
           )}
