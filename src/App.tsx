@@ -26,9 +26,7 @@ import {
   Layout,
   Copy,
   Check,
-  Paperclip,
   Image as ImageIcon,
-  FileIcon,
   Sliders,
   RefreshCw
 } from 'lucide-react';
@@ -101,13 +99,11 @@ export default function App() {
   const [error, setError] = useState<string | null>(null);
   const [showSettings, setShowSettings] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(true);
-  const [isDragging, setIsDragging] = useState(false);
-  const [attachments, setAttachments] = useState<any[]>([]);
   const [showParamMenu, setShowParamMenu] = useState(false);
   const [showStrategy, setShowStrategy] = useState(false);
   const [deferredPrompt, setDeferredPrompt] = useState<any>(null);
   const [fetchedModels, setFetchedModels] = useState<Record<string, { id: string; label: string; category: string }[]>>({});
-  const fileInputRef = useRef<HTMLInputElement>(null);
+  const [pendingOptions, setPendingOptions] = useState<{ query: string; options: string[] } | null>(null);
   
   const [settings, setSettings] = useState<AppSettings>(() => {
     const saved = localStorage.getItem('iluv_settings');
@@ -318,110 +314,12 @@ export default function App() {
     }
   };
 
-  const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const files = e.target.files;
-    if (!files) return;
-    processFiles(files);
-    if (fileInputRef.current) fileInputRef.current.value = '';
-  };
-
-  const processFiles = (files: FileList | File[]) => {
-    const MAX_FILE_SIZE = 20 * 1024 * 1024; // 20MB limit
-    
-    Array.from(files).forEach(file => {
-      if (file.size > MAX_FILE_SIZE) {
-        setError(`Secure Protocol: Item "${file.name}" exceeds 20MB threshold.`);
-        setTimeout(() => setError(null), 5000);
-        return;
-      }
-
-      const isTextFile = file.type.startsWith('text/') || 
-                         ['application/json', 'application/javascript', 'text/javascript', 'application/xml'].includes(file.type) ||
-                         file.name.endsWith('.md') || file.name.endsWith('.txt') || file.name.endsWith('.csv') || file.name.endsWith('.log');
-
-      const reader = new FileReader();
-      reader.onload = (event) => {
-        const result = event.target?.result as string;
-        
-        setAttachments(prev => {
-          // Prevent duplicates by name and size
-          if (prev.some(a => a.name === file.name && a.size === file.size)) return prev;
-          
-          if (isTextFile) {
-            return [...prev, {
-              name: file.name,
-              type: file.type,
-              size: file.size,
-              isText: true,
-              content: result
-            }];
-          } else {
-            const base64 = result.split(',')[1];
-            return [...prev, {
-              name: file.name,
-              type: file.type,
-              size: file.size,
-              isText: false,
-              data: base64
-            }];
-          }
-        });
-      };
-
-      if (isTextFile) {
-        reader.readAsText(file);
-      } else {
-        reader.readAsDataURL(file);
-      }
-    });
-  };
-
-  const handleDragOver = (e: React.DragEvent) => {
-    e.preventDefault();
-    e.stopPropagation();
-    if (!isDragging) setIsDragging(true);
-  };
-
-  const handleDragLeave = (e: React.DragEvent) => {
-    e.preventDefault();
-    e.stopPropagation();
-    // Only set to false if we're actually leaving the container
-    if (e.currentTarget === e.target) {
-      setIsDragging(false);
-    }
-  };
-
-  const handleDrop = (e: React.DragEvent) => {
-    e.preventDefault();
-    e.stopPropagation();
-    setIsDragging(false);
-    if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
-      processFiles(e.dataTransfer.files);
-    }
-  };
-
-  const handlePaste = (e: React.ClipboardEvent) => {
-    const items = e.clipboardData.items;
-    const files: File[] = [];
-    for (let i = 0; i < items.length; i++) {
-      if (items[i].kind === 'file') {
-        const file = items[i].getAsFile();
-        if (file) files.push(file);
-      }
-    }
-    if (files.length > 0) {
-      processFiles(files);
-    }
-  };
-
-  const removeAttachment = (index: number) => {
-    setAttachments(prev => prev.filter((_, i) => i !== index));
-  };
-
-  const handleSendMessage = async () => {
-    if (!input.trim() && attachments.length === 0) return;
+  const handleSendMessage = async (overrideInput?: string) => {
+    const finalInput = overrideInput || input;
+    if (!finalInput.trim()) return;
     if (isSessionLoading(activeSessionId)) return;
     
+    setPendingOptions(null);
     const provider = getActiveProvider();
 
     if (!provider || !provider.apiKey) {
@@ -432,10 +330,8 @@ export default function App() {
 
     let sessionId: string | null = null;
     try {
-      const currentInput = input;
-      const currentAttachments = [...attachments];
-      setInput('');
-      setAttachments([]);
+      const currentInput = finalInput;
+      if (!overrideInput) setInput('');
       setError(null);
       
       const activeSession = getActiveSession();
@@ -446,15 +342,14 @@ export default function App() {
         id: generateId(),
         role: 'user',
         content: currentInput,
-        timestamp: Date.now(),
-        attachments: currentAttachments.length > 0 ? currentAttachments : undefined
+        timestamp: Date.now()
       };
 
       let updatedSessions = [...sessions];
       if (!activeSession) {
         const newSession: ChatSession = {
           id: sessionId,
-          title: currentInput.slice(0, 30) || 'New iluv Session',
+          title: currentInput.slice(0, 30) || 'New Session',
           messages: [userMessage],
           createdAt: Date.now(),
           updatedAt: Date.now()
@@ -480,9 +375,9 @@ export default function App() {
       const model = settings.model || DEFAULT_MODEL;
       const isGemini = provider.baseUrl.includes('generative');
 
-      let sysInstruction = "You are iluv, an ultra-premium, luxury AI assistant. You speak with confidence and precision. MANDATORY: All data tables must be formatted as Github Flavored Markdown (GFM) tables. Always add a luxury spin to your responses.";
+      let sysInstruction = "You are a direct and task-oriented AI assistant. Always provide the required answer immediately without unnecessary context, marketing fluff, or heavy explanations unless explicitly requested. Avoid words like 'bespoke', 'elite', 'luxury', or 'premium'. MANDATORY: If a user's request is ambiguous or requires specific choices to provide a 100% correct result, you MUST wrap exactly 3-5 clarification options in an <options> tag like this: <options>{\"query\": \"Which format did you mean?\", \"options\": [\"Option 1\", \"Option 2\"]}</options>. All data tables must be formatted as Github Flavored Markdown (GFM) tables.";
       if (settings.maxOutputTokens !== undefined && settings.maxOutputTokens > 0) {
-        sysInstruction += ` IMPORTANT: You must strictly adjust and compress your entire answer to fit fully within ${settings.maxOutputTokens} tokens. Do perfectly finish your thoughts and NEVER cut off your response mid-sentence. Be concise if necessary.`;
+        sysInstruction += ` IMPORTANT: You must strictly adjust and compress your entire answer to fit fully within ${settings.maxOutputTokens} tokens. Do perfectly finish your thoughts and NEVER cut off your response mid-sentence. Be concise.`;
       }
 
       const startTime = Date.now();
@@ -637,7 +532,7 @@ export default function App() {
                   ...s,
                   messages: s.messages.map(m => m.id === assistantMessageId ? { 
                     ...m, 
-                    content: fullText,
+                    content: fullText.replace(/<options>.*?<\/options>/s, '').trim(),
                     modelUsed: model,
                     attachments: generatedAttachments.length > 0 ? generatedAttachments : undefined
                   } : m),
@@ -646,6 +541,16 @@ export default function App() {
               }
               return s;
             }));
+          }
+
+          if (fullText.includes('<options>')) {
+            const match = fullText.match(/<options>(.*?)<\/options>/s);
+            if (match && match[1]) {
+              try {
+                const parsed = JSON.parse(match[1]);
+                setPendingOptions(parsed);
+              } catch(e) {}
+            }
           }
         }
       } else {
@@ -790,6 +695,17 @@ export default function App() {
         } else {
           fullText = data.choices?.[0]?.message?.content || '';
           finalTokens = data.usage?.completion_tokens || data.usage?.total_tokens || 0;
+        }
+
+        if (fullText.includes('<options>')) {
+          const match = fullText.match(/<options>(.*?)<\/options>/s);
+          if (match && match[1]) {
+            try {
+              const parsed = JSON.parse(match[1]);
+              setPendingOptions(parsed);
+              fullText = fullText.replace(/<options>.*?<\/options>/s, '').trim();
+            } catch(e) {}
+          }
         }
 
         setSessions(prev => prev.map(s => {
@@ -1071,28 +987,8 @@ export default function App() {
       </AnimatePresence>
 
       {/* Main Content */}
-      <div 
-        className="relative flex-1 flex flex-col min-w-0 bg-[var(--bg-app)]"
-        onDragOver={handleDragOver}
-        onDragLeave={handleDragLeave}
-        onDrop={handleDrop}
-      >
-        <AnimatePresence>
-          {isDragging && (
-            <motion.div 
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
-              exit={{ opacity: 0 }}
-              className="absolute inset-0 z-[100] bg-[#0070f3]/10 backdrop-blur-md flex flex-col items-center justify-center border-4 border-dashed border-[#0070f3]/50 m-4 rounded-3xl"
-            >
-              <div className="bg-[#0a0a0a] p-10 rounded-full shadow-2xl scale-110">
-                <Paperclip size={60} className="text-[#0070f3] animate-bounce" />
-              </div>
-              <h3 className="text-2xl font-black text-white mt-8 uppercase tracking-[0.3em]">Drop Intel Here</h3>
-              <p className="text-[#0070f3] font-bold mt-2 uppercase tracking-widest text-xs opacity-80">Encryption Gate Active</p>
-            </motion.div>
-          )}
-        </AnimatePresence>
+      <div className="relative flex-1 flex flex-col min-w-0 bg-[var(--bg-app)]">
+        <AnimatePresence />
         {!sidebarOpen && (
           <button 
             onClick={() => setSidebarOpen(true)}
@@ -1213,39 +1109,6 @@ export default function App() {
                        )}
                     </div>
                   </div>
-                  {m.attachments && (
-                    <div className="mt-3 flex flex-wrap gap-4">
-                      {m.attachments.map((att, i) => {
-                        const isMedia = att.type.startsWith('image/') || att.type.startsWith('video/');
-                        return (
-                        <div key={i} className={`flex items-center gap-1.5 ${isMedia ? 'w-full' : 'p-1.5 bg-black/10 dark:bg-white/10 rounded-sm'}`}>
-                           {isMedia ? (
-                             <div className="relative group/dl inline-block max-w-full">
-                               {att.type.startsWith('video/') ? (
-                                 <video controls src={`data:${att.type};base64,${att.data}`} className="w-full max-w-[600px] h-auto object-contain rounded-xl shadow-lg border border-white/10" />
-                               ) : (
-                                 <img src={`data:${att.type};base64,${att.data}`} className="w-full max-w-[400px] h-auto object-contain rounded-xl shadow-lg border border-white/10" />
-                               )}
-                               <button 
-                                 onClick={(e) => { e.preventDefault(); handleDownload(att.data, att.name, att.type); }}
-                                 className={`${att.type.startsWith('video/') ? 'absolute top-2 right-2 p-2 bg-black/50 hover:bg-black/80' : 'absolute inset-0 bg-black/50 opacity-0 group-hover/dl:opacity-100'} flex flex-col items-center justify-center transition-all rounded-xl backdrop-blur-sm z-10`}
-                                 title={`Download ${att.type.startsWith('video/') ? 'Video' : 'Image'}`}
-                               >
-                                 <Download size={att.type.startsWith('video/') ? 16 : 32} className="text-white mb-2" />
-                                 {!att.type.startsWith('video/') && <span className="text-white text-xs font-bold tracking-widest uppercase">Download</span>}
-                               </button>
-                             </div>
-                           ) : (
-                             <>
-                               <FileIcon size={16} />
-                               <span className="text-[10px] truncate max-w-[100px]">{att.name}</span>
-                             </>
-                           )}
-                        </div>
-                        );
-                      })}
-                    </div>
-                  )}
                 </div>
               </motion.div>
             ))
@@ -1289,38 +1152,32 @@ export default function App() {
         <div className="relative border-t border-[#111111] bg-[#000000] p-2 sm:p-10 transition-all">
           <div className="max-w-5xl mx-auto space-y-4 sm:space-y-6">
             
-            {/* Attachment Preview (Fixed Gap) */}
             <AnimatePresence>
-              {attachments.length > 0 && (
+              {pendingOptions && (
                 <motion.div 
-                  initial={{ opacity: 0, height: 0 }}
-                  animate={{ opacity: 1, height: 'auto' }}
-                  exit={{ opacity: 0, height: 0 }}
-                  className="flex flex-wrap gap-4 p-4 bg-[#0a0a0a] border border-[#111111] rounded-2xl overflow-hidden"
+                  initial={{ opacity: 0, scale: 0.95, y: 10 }}
+                  animate={{ opacity: 1, scale: 1, y: 0 }}
+                  exit={{ opacity: 0, scale: 0.95, y: 10 }}
+                  className="bg-[#0a0a0a] border border-[#0070f3]/30 rounded-2xl p-4 shadow-2xl mb-2"
                 >
-                  {attachments.map((file, i) => (
-                    <div key={i} className="group relative flex items-center gap-3 p-3 bg-[#111111] rounded-xl border border-white/5">
-                      {file.type.startsWith('image/') ? (
-                        <img src={`data:${file.type};base64,${file.data}`} className="w-12 h-12 object-cover rounded-lg" />
-                      ) : file.type.startsWith('video/') ? (
-                        <video src={`data:${file.type};base64,${file.data}`} className="w-12 h-12 object-cover rounded-lg" muted />
-                      ) : (
-                        <div className="w-12 h-12 flex items-center justify-center bg-black/40 rounded-lg">
-                          <FileIcon size={20} className="text-[#3b82f6]" />
-                        </div>
-                      )}
-                      <div className="flex flex-col min-w-0 pr-10">
-                        <span className="text-[11px] font-black text-white/80 truncate max-w-[140px] uppercase tracking-wider">{file.name}</span>
-                        <span className="text-[9px] text-[#71717a] uppercase font-mono">{file.type.split('/')[1]}</span>
-                      </div>
-                      <button 
-                        onClick={() => removeAttachment(i)}
-                        className="absolute right-2 top-2 p-1.5 bg-red-600 hover:bg-red-500 text-white rounded-full opacity-0 group-hover:opacity-100 transition-opacity"
+                  <p className="text-[11px] font-black text-[#0070f3] uppercase tracking-[0.2em] mb-3">{pendingOptions.query}</p>
+                  <div className="flex flex-wrap gap-2">
+                    {pendingOptions.options.map((opt, i) => (
+                      <button
+                        key={i}
+                        onClick={() => handleSendMessage(opt)}
+                        className="px-4 py-2 bg-[#111111] hover:bg-[#0070f3] text-white text-xs font-bold rounded-lg transition-all border border-white/5 hover:border-[#0070f3]"
                       >
-                        <X size={10} />
+                        {opt}
                       </button>
-                    </div>
-                  ))}
+                    ))}
+                    <button
+                      onClick={() => setPendingOptions(null)}
+                      className="px-4 py-2 bg-transparent text-[#71717a] text-xs font-bold rounded-lg hover:text-white transition-all"
+                    >
+                      Cancel
+                    </button>
+                  </div>
                 </motion.div>
               )}
             </AnimatePresence>
@@ -1418,21 +1275,7 @@ export default function App() {
               </AnimatePresence>
 
               <div className="flex items-end gap-2 sm:gap-3 bg-[#0a0a0a] border border-[#111111] focus-within:border-[#0070f3] rounded-[24px] sm:rounded-3xl p-2 pl-4 sm:p-5 sm:pl-7 transition-all shadow-2xl ring-1 ring-[#0070f3]/10">
-                <input
-                  type="file"
-                  multiple
-                  ref={fileInputRef}
-                  onChange={handleFileSelect}
-                  className="hidden"
-                />
                 <div className="flex gap-1 mb-1 sm:mb-1">
-                  <button 
-                    onClick={() => fileInputRef.current?.click()}
-                    className="p-2 sm:p-3 hover:bg-[#111111] rounded-xl sm:rounded-2xl transition-all text-[#71717a] hover:text-[#0070f3]"
-                    title="Upload Intelligence"
-                  >
-                    <Paperclip size={20} className="sm:w-6 sm:h-6" />
-                  </button>
                   <button 
                     onClick={() => setShowParamMenu(!showParamMenu)}
                     className={`p-2 sm:p-3 rounded-xl sm:rounded-2xl transition-all ${showParamMenu ? 'bg-[#0070f3]/10 text-[#0070f3]' : 'hover:bg-[#111111] text-[#71717a] hover:text-[#0070f3]'}`}
@@ -1448,7 +1291,6 @@ export default function App() {
                     e.target.style.height = 'auto';
                     e.target.style.height = Math.min(e.target.scrollHeight, 200) + 'px';
                   }}
-                  onPaste={handlePaste}
                   onKeyDown={(e) => {
                     if (e.key === 'Enter' && !e.shiftKey) {
                       e.preventDefault();
@@ -1456,15 +1298,15 @@ export default function App() {
                       e.currentTarget.style.height = 'auto';
                     }
                   }}
-                  placeholder="Initiate secure sequence..."
+                  placeholder="Initiate sequence..."
                   rows={1}
                   className="flex-1 max-h-48 sm:max-h-64 bg-transparent border-none focus:ring-0 text-white placeholder-white/20 resize-none py-3 scroll-hide font-semibold text-base sm:text-lg tracking-tight leading-relaxed"
                 />
                 <button 
-                  onClick={handleSendMessage}
-                  disabled={(!input.trim() && attachments.length === 0) || isSessionLoading(activeSessionId)}
+                  onClick={() => handleSendMessage()}
+                  disabled={!input.trim() || isSessionLoading(activeSessionId)}
                   className={`p-3 sm:p-4 mb-0.5 sm:mb-1 rounded-xl sm:rounded-2xl transition-all shadow-2xl ${
-                    input.trim() || attachments.length > 0 
+                    input.trim() 
                       ? 'bg-[#0070f3] text-white hover:scale-105 active:scale-95 shadow-[#0070f3]/50' 
                       : 'bg-[#111111] text-[#71717a] opacity-50'
                   }`}
