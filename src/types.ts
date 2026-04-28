@@ -43,5 +43,5 @@ export interface AppSettings {
   maxOutputTokens?: number;
 }
 
-export const DEFAULT_MODEL = 'gemini-1.5-flash';
+export const DEFAULT_MODEL = 'gemini-3-flash-preview';
 export const DEFAULT_BASE_URL = 'https://generativelanguage.googleapis.com';

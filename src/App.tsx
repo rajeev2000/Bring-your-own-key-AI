@@ -34,8 +34,6 @@ import { motion, AnimatePresence } from 'motion/react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { GoogleGenAI } from '@google/genai';
-import { jsPDF } from 'jspdf';
-import * as XLSX from 'xlsx';
 
 import { Message, ChatSession, AppSettings, DEFAULT_MODEL, DEFAULT_BASE_URL } from './types';
 
@@ -73,12 +71,13 @@ const isGeminiUrl = (url: string) => {
 
 const PREDEFINED_MODELS: Record<string, { id: string; label: string; category: string }[]> = {
   gemini: [
-    { id: 'gemini-1.5-pro', label: 'Gemini 1.5 Pro', category: 'Pro Models' },
-    { id: 'gemini-2.0-pro-exp-02-05', label: 'Gemini 2.0 Pro', category: 'Pro Models' },
-    { id: 'gemini-1.5-flash', label: 'Gemini 1.5 Flash', category: 'Fast Models' },
-    { id: 'gemini-2.5-flash', label: 'Gemini 2.5 Flash', category: 'Fast Models' },
+    { id: 'gemini-3.1-pro-preview', label: 'Gemini 3.1 Pro', category: 'Pro Models' },
+    { id: 'gemini-3-flash-preview', label: 'Gemini 3.0 Flash', category: 'Fast Models' },
+    { id: 'gemini-3.1-flash-lite-preview', label: 'Gemini 3.1 Flash Lite', category: 'Fast Models' },
     { id: 'gemini-2.0-flash-thinking-exp-01-21', label: 'Gemini 2.0 Thinking', category: 'Thinking Models' },
-    { id: 'imagen-3.0-generate-002', label: 'Imagen 3.0', category: 'Image Generation' }
+    { id: 'gemini-3.1-flash-image-preview', label: 'Imagen 4 (High Quality)', category: 'Image Generation' },
+    { id: 'gemini-2.5-flash-image', label: 'Imagen 4 (Turbo)', category: 'Image Generation' },
+    { id: 'veo-3.1-lite-generate-preview', label: 'Veo 3.1 Lite (Video)', category: 'Video Generation' }
   ],
   openai: [
     { id: 'gpt-4o', label: 'GPT-4o', category: 'Pro Models' },
@@ -181,12 +180,24 @@ export default function App() {
               const id = m.name.replace('models/', '');
               const label = m.displayName || id;
               let category = 'Other Models';
+              
+              // Sort by capability
               if (id.includes('pro')) category = 'Pro Models';
-              else if (id.includes('thinking') || id.includes('think') || id.includes('o1') || id.includes('o3') || id.includes('o4')) category = 'Thinking Models';
+              else if (id.includes('thinking') || id.includes('think')) category = 'Thinking Models';
               else if (id.includes('flash') || id.includes('mini') || id.includes('lite') || id.includes('nano')) category = 'Fast Models';
+              
               if (id.includes('image') || id.includes('imagen') || id.includes('vision') || id.includes('dall-e')) category = 'Image Generation';
-              if (id.includes('video') || id.includes('runway') || id.includes('sora') || id.includes('luma') || id.includes('veo') || id.includes('kling') || id.includes('haiper') || id.includes('pika') || id.includes('minimax') || id.includes('hailuo')) category = 'Video Generation';
+              if (id.includes('video') || id.includes('veo')) category = 'Video Generation';
+              if (id.includes('tts') || id.includes('live') || id.includes('audio')) category = 'Audio & Speech';
+              
               return { id, label, category };
+            }).filter((m: any) => {
+              // Filter out problematic models that the user reported or that are likely to fail generateContent
+              const id = m.id.toLowerCase();
+              if (id.includes('veo') && !id.includes('3.1')) return false; // Filter old veo models
+              if (id.includes('embedding')) return false; // Can't chat with embeddings
+              if (id === 'gemini-pro' || id === 'gemini-1.5-flash' || id === 'gemini-1.5-pro') return false; // Prohibited
+              return true;
             });
           }
         }
@@ -259,7 +270,7 @@ export default function App() {
 
   useEffect(() => {
     const handleError = (e: ErrorEvent) => {
-      setError(`Luxury Warning: ${e.message}`);
+      setError(`System Warning: ${e.message}`);
     };
     window.addEventListener('error', handleError);
     return () => window.removeEventListener('error', handleError);
@@ -394,7 +405,13 @@ export default function App() {
           role: 'assistant', 
           content: match.content + "\n\n*(Retrieved from local cache)*", 
           timestamp: Date.now(),
-          modelUsed: "Local Cache"
+          modelUsed: "Local Cache",
+          thoughtProcess: JSON.stringify({
+            intent: "Cache Retrieval",
+            complexity: "None",
+            focus: "Historical Match",
+            inferredAction: "Matching query with local database results to bypass LLM latency and cost."
+          })
         };
         
         setSessions(prev => {
@@ -434,8 +451,7 @@ export default function App() {
         id: generateId(),
         role: 'user',
         content: currentInput,
-        timestamp: Date.now(),
-        thoughtProcess: analysis
+        timestamp: Date.now()
       };
 
       let updatedSessions = [...sessions];
@@ -484,7 +500,8 @@ export default function App() {
         role: 'assistant',
         content: '',
         timestamp: Date.now(),
-        isStreaming: true
+        isStreaming: true,
+        thoughtProcess: analysis
       };
 
       setSessions(prev => prev.map(s => {
@@ -850,51 +867,6 @@ export default function App() {
     }
   };
 
-  const exportToPDF = () => {
-    const session = getActiveSession();
-    if (!session) return;
-
-    const doc = new jsPDF();
-    let y = 10;
-    doc.setFontSize(16);
-    doc.text(`iluv Session: ${session.title}`, 10, y);
-    y += 10;
-    doc.setFontSize(10);
-    
-    session.messages.forEach(m => {
-      const rolePrefix = m.role === 'user' ? 'User: ' : 'iluv: ';
-      const splitText = doc.splitTextToSize(rolePrefix + m.content, 180);
-      
-      if (y + splitText.length * 5 > 280) {
-        doc.addPage();
-        y = 10;
-      }
-      
-      doc.text(splitText, 10, y);
-      y += (splitText.length * 5) + 5;
-    });
-
-    doc.save(`${session.title.replace(/\s/g, '_')}.pdf`);
-  };
-
-  const exportToExcel = () => {
-    const session = getActiveSession();
-    if (!session) return;
-
-    const data = session.messages.map(m => ({
-      Role: m.role,
-      Content: m.content,
-      Timestamp: new Date(m.timestamp).toLocaleString(),
-      Tokens: m.tokenCount || '-',
-      Model: m.modelUsed || 'N/A'
-    }));
-
-    const ws = XLSX.utils.json_to_sheet(data);
-    const wb = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(wb, ws, "Chat History");
-    XLSX.writeFile(wb, `${session.title.replace(/\s/g, '_')}.xlsx`);
-  };
-
   const [copiedId, setCopiedId] = useState<string | null>(null);
 
   const copyToClipboard = (text: string, id: string) => {
@@ -963,7 +935,16 @@ export default function App() {
   };
 
   const displayModels = getDisplayModels();
-  const displayCategories = Array.from(new Set(displayModels.map(m => m.category)));
+  const CATEGORY_ORDER = ['Pro Models', 'Fast Models', 'Thinking Models', 'Image Generation', 'Video Generation', 'Audio & Speech', 'Other Models'];
+  const displayCategories = Array.from(new Set(displayModels.map(m => m.category)))
+    .sort((a, b) => {
+      const idxA = CATEGORY_ORDER.indexOf(a);
+      const idxB = CATEGORY_ORDER.indexOf(b);
+      if (idxA === -1 && idxB === -1) return a.localeCompare(b);
+      if (idxA === -1) return 1;
+      if (idxB === -1) return -1;
+      return idxA - idxB;
+    });
 
   // --- UI Components ---
   return (
@@ -1079,6 +1060,59 @@ export default function App() {
         )}
       </AnimatePresence>
 
+      {/* Ambiguity Resolution Modal */}
+      <AnimatePresence>
+        {pendingOptions && (
+          <div className="fixed inset-0 z-[200] flex items-center justify-center p-4 sm:p-6 bg-black/80 backdrop-blur-sm">
+            <motion.div 
+              initial={{ opacity: 0, scale: 0.9, y: 20 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.9, y: 20 }}
+              className="bg-[#0a0a0a] border border-[#0070f3]/40 rounded-[32px] p-8 sm:p-10 shadow-[0_0_50px_rgba(0,112,243,0.2)] max-w-lg w-full relative overflow-hidden"
+            >
+              <div className="absolute top-0 left-0 w-full h-1 bg-gradient-to-r from-transparent via-[#0070f3] to-transparent opacity-50" />
+              
+              <div className="flex items-center gap-3 mb-6">
+                <div className="w-2 h-2 rounded-full bg-[#0070f3] animate-ping" />
+                <h3 className="text-[10px] font-black text-[#0070f3] uppercase tracking-[0.4em]">System Clarification Required</h3>
+              </div>
+
+              <p className="text-xl sm:text-2xl font-bold text-white mb-8 tracking-tight leading-tight">
+                {pendingOptions.query}
+              </p>
+
+              <div className="flex flex-col gap-3">
+                {pendingOptions.options.map((opt, i) => (
+                  <button
+                    key={i}
+                    onClick={() => {
+                      if (opt === "Reuse Cached Answer") {
+                        handleSendMessage(undefined, "true");
+                      } else if (opt === "Query LLM Anyway") {
+                        handleSendMessage(input);
+                      } else {
+                        handleSendMessage(opt);
+                      }
+                    }}
+                    className="group flex items-center justify-between px-6 py-4 bg-[#111111] hover:bg-[#0070f3] text-white rounded-[20px] transition-all border border-white/5 hover:border-[#0070f3] text-left"
+                  >
+                    <span className="font-bold text-sm tracking-wide">{opt}</span>
+                    <ChevronRight size={18} className="opacity-0 group-hover:opacity-100 transition-all -translate-x-2 group-hover:translate-x-0" />
+                  </button>
+                ))}
+              </div>
+
+              <button
+                onClick={() => setPendingOptions(null)}
+                className="mt-8 w-full py-3 text-[#71717a] text-[10px] font-black uppercase tracking-[0.2em] hover:text-white transition-all"
+              >
+                Dismiss Sequence
+              </button>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
       {/* Main Content */}
       <div className="relative flex-1 flex flex-col min-w-0 bg-[var(--bg-app)]">
         <AnimatePresence />
@@ -1106,24 +1140,6 @@ export default function App() {
           </div>
           
           <div className="flex items-center gap-2">
-            {getActiveSession() && (
-              <div className="flex items-center gap-2 bg-slate-100 dark:bg-slate-900 p-1 rounded-none border border-[var(--border-app)]">
-                <button 
-                  onClick={exportToPDF}
-                  title="Export to PDF"
-                  className="p-2 hover:bg-white dark:hover:bg-slate-800 rounded-none transition-all text-slate-600 dark:text-slate-300"
-                >
-                  <FileText size={18} />
-                </button>
-                <button 
-                  onClick={exportToExcel}
-                  title="Export to Excel"
-                  className="p-2 hover:bg-white dark:hover:bg-slate-800 rounded-none transition-all text-slate-600 dark:text-slate-300"
-                >
-                  <Table size={18} />
-                </button>
-              </div>
-            )}
           </div>
         </header>
 
@@ -1143,14 +1159,14 @@ export default function App() {
               </motion.div>
               <h2 className="text-4xl font-black mb-4 tracking-tighter uppercase italic text-white leading-none">iluv</h2>
               <p className="text-[#71717a] mb-10 font-medium tracking-wide">
-                Secure. Minimal. Elite. Your private intelligence architecture.
+                Secure. Minimal. Direct. Your private intelligence architecture.
               </p>
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 w-full">
                 {[
                   { icon: Table, text: "Data Visualisation", cmd: "Generate a markdown table for global tech analysis" },
                   { icon: Layout, text: "Strategic Roadmap", cmd: "Create a 3-month strategic plan for a boutique startup" },
                   { icon: Command, text: "System Synthesis", cmd: "Explain the core mechanics of privacy-focused AI" },
-                  { icon: FileText, text: "Elite Drafting", cmd: "Draft a concise executive report on market trends" }
+                  { icon: FileText, text: "Technical Drafting", cmd: "Draft a concise executive report on market trends" }
                 ].map((item, idx) => (
                   <button 
                     key={idx}
@@ -1182,14 +1198,14 @@ export default function App() {
                     </ReactMarkdown>
                   </div>
                   
-                  {m.role === 'user' && m.thoughtProcess && (
+                  {m.role === 'assistant' && m.thoughtProcess && (
                     <div className="mt-4 pt-4 border-t border-white/10">
                       <button 
                         onClick={() => setOpenThoughts(prev => ({ ...prev, [m.id]: !prev[m.id] }))}
                         className="flex items-center gap-2 text-[10px] font-black uppercase tracking-[0.2em] text-white/50 hover:text-white transition-colors"
                       >
                         <ChevronDown size={12} className={`transition-transform ${openThoughts[m.id] ? 'rotate-180' : ''}`} />
-                        Cognitive Insight
+                        System Logic Analysis
                       </button>
                       <AnimatePresence>
                         {openThoughts[m.id] && (
@@ -1199,9 +1215,24 @@ export default function App() {
                             exit={{ height: 0, opacity: 0 }}
                             className="overflow-hidden"
                           >
-                            <pre className="mt-3 p-3 bg-black/20 rounded-xl text-[10px] font-mono text-white/70 whitespace-pre-wrap leading-relaxed">
-                              {m.thoughtProcess}
-                            </pre>
+                            <div className="mt-3 p-4 bg-[#050505] rounded-xl border border-[#111111] shadow-inner">
+                              <div className="grid grid-cols-2 gap-4 mb-4">
+                                {Object.entries(JSON.parse(m.thoughtProcess)).map(([key, val]) => (
+                                  key !== 'inferredAction' && (
+                                    <div key={key}>
+                                      <span className="block text-[8px] text-[#71717a] font-black uppercase tracking-widest mb-1">{key}</span>
+                                      <span className="text-[11px] text-[#3b82f6] font-bold">{String(val)}</span>
+                                    </div>
+                                  )
+                                ))}
+                              </div>
+                              <div className="pt-3 border-t border-[#111111]">
+                                <span className="block text-[8px] text-[#71717a] font-black uppercase tracking-widest mb-1">Execution Strategy</span>
+                                <p className="text-[11px] text-white/70 leading-relaxed italic">
+                                  {JSON.parse(m.thoughtProcess).inferredAction}
+                                </p>
+                              </div>
+                            </div>
                           </motion.div>
                         )}
                       </AnimatePresence>
@@ -1272,43 +1303,7 @@ export default function App() {
         <div className="relative border-t border-[#111111] bg-[#000000] p-2 sm:p-10 transition-all">
           <div className="max-w-5xl mx-auto space-y-4 sm:space-y-6">
             
-            <AnimatePresence>
-              {pendingOptions && (
-                <motion.div 
-                  initial={{ opacity: 0, scale: 0.95, y: 10 }}
-                  animate={{ opacity: 1, scale: 1, y: 0 }}
-                  exit={{ opacity: 0, scale: 0.95, y: 10 }}
-                  className="bg-[#0a0a0a] border border-[#0070f3]/30 rounded-2xl p-4 shadow-2xl mb-2"
-                >
-                  <p className="text-[11px] font-black text-[#0070f3] uppercase tracking-[0.2em] mb-3">{pendingOptions.query}</p>
-                  <div className="flex flex-wrap gap-2">
-                    {pendingOptions.options.map((opt, i) => (
-                      <button
-                        key={i}
-                        onClick={() => {
-                          if (opt === "Reuse Cached Answer") {
-                            handleSendMessage(undefined, "true");
-                          } else if (opt === "Query LLM Anyway") {
-                            handleSendMessage(input); // Pass input to skip cache check
-                          } else {
-                            handleSendMessage(opt);
-                          }
-                        }}
-                        className="px-4 py-2 bg-[#111111] hover:bg-[#0070f3] text-white text-xs font-bold rounded-lg transition-all border border-white/5 hover:border-[#0070f3]"
-                      >
-                        {opt}
-                      </button>
-                    ))}
-                    <button
-                      onClick={() => setPendingOptions(null)}
-                      className="px-4 py-2 bg-transparent text-[#71717a] text-xs font-bold rounded-lg hover:text-white transition-all"
-                    >
-                      Cancel
-                    </button>
-                  </div>
-                </motion.div>
-              )}
-            </AnimatePresence>
+            <AnimatePresence />
 
             <div className="relative">
               <AnimatePresence>
