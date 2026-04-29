@@ -44,7 +44,7 @@ import * as XLSX from 'xlsx';
 import { Document, Packer, Paragraph, TextRun } from 'docx';
 import { LineChart, Line, BarChart, Bar, PieChart, Pie, AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip as RechartsTooltip, Legend, ResponsiveContainer } from 'recharts';
 
-import { Message, ChatSession, AppSettings, DEFAULT_MODEL, DEFAULT_BASE_URL } from './types';
+import { Message, ChatSession, AppSettings, DEFAULT_MODEL, DEFAULT_BASE_URL, Attachment } from './types';
 
 const generateId = () => {
   try {
@@ -114,6 +114,8 @@ export default function App() {
   const [deferredPrompt, setDeferredPrompt] = useState<any>(null);
   const [fetchedModels, setFetchedModels] = useState<Record<string, { id: string; label: string; category: string }[]>>({});
   const [pendingOptions, setPendingOptions] = useState<{ query: string; options: string[] } | null>(null);
+  const [pendingAttachments, setPendingAttachments] = useState<Attachment[]>([]);
+  const fileInputRef = useRef<HTMLInputElement>(null);
   
   const [settings, setSettings] = useState<AppSettings>(() => {
     const saved = localStorage.getItem('iluv_settings');
@@ -242,6 +244,47 @@ export default function App() {
     } catch (err) {
       console.error(`Failed to fetch models for ${provider.name}`, err);
     }
+  };
+
+  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = e.target.files;
+    if (!files) return;
+
+    Array.from(files).forEach(file => {
+      const isText = file.type.startsWith('text/') || file.name.endsWith('.md') || file.name.endsWith('.txt');
+      
+      if (isText) {
+        const reader = new FileReader();
+        reader.onload = (event) => {
+          const content = event.target?.result as string;
+          setPendingAttachments(prev => [...prev, {
+            name: file.name,
+            type: file.type || 'text/plain',
+            content: content,
+            isText: true
+          }]);
+        };
+        reader.readAsText(file);
+      } else {
+        const reader = new FileReader();
+        reader.onload = (event) => {
+          const base64 = (event.target?.result as string).split(',')[1];
+          setPendingAttachments(prev => [...prev, {
+            name: file.name,
+            type: file.type,
+            data: base64,
+            isText: false
+          }]);
+        };
+        reader.readAsDataURL(file);
+      }
+    });
+    // Reset input
+    e.target.value = '';
+  };
+
+  const removePendingAttachment = (index: number) => {
+    setPendingAttachments(prev => prev.filter((_, i) => i !== index));
   };
 
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -599,8 +642,10 @@ export default function App() {
         id: generateId(),
         role: 'user',
         content: currentInput,
-        timestamp: Date.now()
+        timestamp: Date.now(),
+        attachments: pendingAttachments.length > 0 ? [...pendingAttachments] : undefined
       };
+      setPendingAttachments([]);
 
       let updatedSessions = [...sessions];
       if (!activeSession) {
@@ -686,6 +731,8 @@ export default function App() {
               },
             });
             
+            console.log('Gemini Image Generation Raw Response:', response);
+            
             if (response.generatedImages && response.generatedImages[0]) {
               const base64EncodeString = response.generatedImages[0].image.imageBytes;
               generatedAttachments.push({
@@ -694,11 +741,10 @@ export default function App() {
                  data: base64EncodeString,
                  isText: false
               });
-              fullText = "Here is the generated image.";
+              fullText = ""; // Clear text as per requirement
               imagenSuccess = true;
             } else {
-              fullText = "Failed to generate image.";
-              imagenSuccess = true; // it succeeded in api call but failed to give image? let's not fallback.
+              throw new Error("Model failed to return an image asset.");
             }
 
             setSessions(prev => prev.map(s => {
@@ -838,7 +884,8 @@ export default function App() {
                 if (att.isText) {
                   content += `\n[FILE: ${att.name}]\n${att.content}\n[END FILE]`;
                 } else if (att.data) {
-                  content += `\n[IMAGE ATTACHED: ${att.name}]`;
+                  const label = att.type.startsWith('image/') ? 'IMAGE' : 'FILE';
+                  content += `\n[${label} ATTACHED: ${att.name}]`;
                 }
               });
             }
@@ -908,6 +955,7 @@ export default function App() {
         }
 
         const data = await res.json();
+        console.log('OpenAI-compatible Raw Response:', data);
         
         if (isImageModel) {
           const item = (data.data && data.data[0]) ? data.data[0] : data;
@@ -941,12 +989,12 @@ export default function App() {
                  data: b64,
                  isText: false
               });
-              fullText = mimeType.startsWith('video/') ? "Here is the generated video." : "Here is the generated image.";
+              fullText = ""; // Clear text as per requirement
             } else {
-              fullText = "Failed to extract media from response (no URL or b64_json).";
+              throw new Error("Failed to extract media from response (no b64_json found after fetch).");
             }
           } else {
-            fullText = "Failed to extract media from response. It might be pending or in an unsupported format: " + JSON.stringify(data).slice(0, 100);
+            throw new Error("Model response did not contain image data (URL or B64). Raw: " + JSON.stringify(data).slice(0, 200));
           }
         } else if (isLegacyModel) {
           fullText = data.choices?.[0]?.text || '';
@@ -1209,20 +1257,25 @@ export default function App() {
     setTimeout(() => setCopiedId(null), 2000);
   };
 
-  const handleDownload = async (base64: string, filename: string, mimeType: string) => {
+  const handleDownload = async (data: string, filename: string, mimeType: string, isText?: boolean) => {
     try {
-      const byteCharacters = atob(base64);
-      const byteArrays = [];
-      for (let offset = 0; offset < byteCharacters.length; offset += 512) {
-        const slice = byteCharacters.slice(offset, offset + 512);
-        const byteNumbers = new Array(slice.length);
-        for (let i = 0; i < slice.length; i++) {
-          byteNumbers[i] = slice.charCodeAt(i);
+      let blob: Blob;
+      if (isText) {
+        blob = new Blob([data], { type: mimeType });
+      } else {
+        const byteCharacters = atob(data);
+        const byteArrays = [];
+        for (let offset = 0; offset < byteCharacters.length; offset += 512) {
+          const slice = byteCharacters.slice(offset, offset + 512);
+          const byteNumbers = new Array(slice.length);
+          for (let i = 0; i < slice.length; i++) {
+            byteNumbers[i] = slice.charCodeAt(i);
+          }
+          const byteArray = new Uint8Array(byteNumbers);
+          byteArrays.push(byteArray);
         }
-        const byteArray = new Uint8Array(byteNumbers);
-        byteArrays.push(byteArray);
+        blob = new Blob(byteArrays, { type: mimeType });
       }
-      const blob = new Blob(byteArrays, { type: mimeType });
       const url = URL.createObjectURL(blob);
       
       const a = document.createElement('a');
@@ -1589,6 +1642,46 @@ export default function App() {
                     </ReactMarkdown>
                   </div>
                   
+                  {m.attachments && m.attachments.length > 0 && (
+                    <div className="mt-4 flex flex-wrap gap-3">
+                      {m.attachments.map((att, idx) => (
+                        <div key={idx} className="relative group/att">
+                          {att.type.startsWith('image/') ? (
+                            <div className="relative rounded-xl overflow-hidden border border-[var(--border-app)] shadow-lg bg-black/20">
+                              <img 
+                                src={`data:${att.type};base64,${att.data}`} 
+                                alt={att.name}
+                                className="max-w-full sm:max-w-md max-h-[400px] object-contain block hover:scale-[1.02] transition-transform duration-500"
+                                referrerPolicy="no-referrer"
+                              />
+                              <button 
+                                onClick={() => handleDownload(att.isText ? att.content! : att.data!, att.name, att.type, att.isText)}
+                                className="absolute bottom-2 right-2 p-2 bg-black/60 hover:bg-[var(--accent-app)] text-white rounded-lg backdrop-blur-md opacity-0 group-hover/att:opacity-100 transition-all shadow-xl"
+                                title="Download Image"
+                              >
+                                <Download size={16} />
+                              </button>
+                            </div>
+                          ) : (
+                            <div className="flex items-center gap-3 p-3 bg-black/20 border border-[var(--border-app)] rounded-xl hover:border-[var(--accent-app)]/50 transition-all">
+                              <FileText size={18} className="text-[var(--accent-app)]" />
+                              <div className="flex flex-col">
+                                <span className="text-[10px] font-bold text-[var(--text-app)] truncate max-w-[120px]">{att.name}</span>
+                                <span className="text-[8px] text-[var(--text-secondary)] uppercase font-black">{att.type.split('/')[1] || 'FILE'}</span>
+                              </div>
+                              <button 
+                                onClick={() => handleDownload(att.isText ? att.content! : att.data!, att.name, att.type, att.isText)}
+                                className="p-1.5 hover:text-[var(--accent-app)] transition-colors"
+                              >
+                                <Download size={14} />
+                              </button>
+                            </div>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  )}
+
                   {m.audioUrl && (
                     <div className="mt-4 pt-4 border-t border-[var(--border-app)] w-full">
                        <audio controls className="w-full h-10 outline-none" src={m.audioUrl} />
@@ -1720,6 +1813,36 @@ export default function App() {
             
             <AnimatePresence />
 
+            {pendingAttachments.length > 0 && (
+              <div className="flex flex-wrap gap-4 mb-6 px-4">
+                {pendingAttachments.map((att, idx) => (
+                  <motion.div 
+                    key={idx} 
+                    initial={{ opacity: 0, scale: 0.9, y: 10 }}
+                    animate={{ opacity: 1, scale: 1, y: 0 }}
+                    className="relative group h-24 w-24"
+                  >
+                    <div className="h-full w-full rounded-2xl overflow-hidden border-2 border-[var(--border-app)] bg-black/40 shadow-xl group-hover:border-[var(--accent-app)]/50 transition-all">
+                      {att.type.startsWith('image/') ? (
+                        <img src={`data:${att.type};base64,${att.data}`} className="w-full h-full object-cover" />
+                      ) : (
+                        <div className="w-full h-full flex flex-col items-center justify-center p-2 gap-1 text-center">
+                          <FileText size={24} className="text-[var(--accent-app)]" />
+                          <span className="text-[8px] font-black uppercase truncate w-full text-[var(--text-secondary)]">{att.name}</span>
+                        </div>
+                      )}
+                    </div>
+                    <button 
+                      onClick={() => removePendingAttachment(idx)}
+                      className="absolute -top-2 -right-2 p-1.5 bg-red-500 text-white rounded-full shadow-2xl opacity-100 sm:opacity-0 sm:group-hover:opacity-100 transition-all hover:scale-110 active:scale-90 z-10"
+                    >
+                      <X size={12} />
+                    </button>
+                  </motion.div>
+                ))}
+              </div>
+            )}
+
             <div className="relative">
               <AnimatePresence>
                 {showParamMenu && (
@@ -1821,6 +1944,21 @@ export default function App() {
                   >
                     <Sliders size={20} className="sm:w-6 sm:h-6" />
                   </button>
+                  <button 
+                    onClick={() => fileInputRef.current?.click()}
+                    className="p-2 sm:p-3 rounded-xl sm:rounded-2xl hover:bg-[var(--border-app)] text-[var(--text-secondary)] hover:text-[var(--accent-app)] transition-all"
+                    title="Upload Context"
+                  >
+                    <ImageIcon size={20} className="sm:w-6 sm:h-6" />
+                  </button>
+                  <input 
+                    type="file" 
+                    ref={fileInputRef} 
+                    onChange={handleFileChange} 
+                    className="hidden" 
+                    multiple 
+                    accept="image/*,application/pdf,text/plain,text/markdown"
+                  />
                 </div>
                 <textarea 
                   value={input}
