@@ -33,7 +33,9 @@ import {
   Headphones,
   Archive,
   Combine,
-  FolderDown
+  FolderDown,
+  GraduationCap,
+  BookOpen
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import ReactMarkdown from 'react-markdown';
@@ -435,7 +437,8 @@ export default function App() {
       title: `Merged: ${sessionsToMerge.map(s => s.title).join(', ').slice(0, 30)}...`,
       messages: mergedMessages,
       createdAt: sessionsToMerge[0].createdAt,
-      updatedAt: Date.now()
+      updatedAt: Date.now(),
+      studyMode: false
     };
     
     const remainingSessions = sessions.filter(s => !selectedSessionIds.has(s.id));
@@ -474,7 +477,8 @@ export default function App() {
       title: 'New Chat',
       messages: [],
       createdAt: Date.now(),
-      updatedAt: Date.now()
+      updatedAt: Date.now(),
+      studyMode: false
     };
     setSessions([newSession, ...sessions]);
     setActiveSessionId(newSession.id);
@@ -486,6 +490,15 @@ export default function App() {
     if (activeSessionId === id) {
       setActiveSessionId(newSessions.length > 0 ? newSessions[0].id : null);
     }
+  };
+
+  const toggleStudyMode = (sessionId: string) => {
+    setSessions(prev => prev.map(s => {
+      if (s.id === sessionId) {
+        return { ...s, studyMode: !s.studyMode };
+      }
+      return s;
+    }));
   };
 
   const [openThoughts, setOpenThoughts] = useState<Record<string, boolean>>({});
@@ -688,7 +701,8 @@ export default function App() {
           title: currentInput.slice(0, 40).trim() + (currentInput.length > 40 ? '...' : ''),
           messages: [userMessage],
           createdAt: Date.now(),
-          updatedAt: Date.now()
+          updatedAt: Date.now(),
+          studyMode: false
         };
         updatedSessions = [newSession, ...sessions];
         setSessions(updatedSessions);
@@ -718,6 +732,11 @@ export default function App() {
       const isGemini = provider.baseUrl.includes('generative');
 
       let sysInstruction = "You are a highly efficient AI assistant focused on 100% accuracy and direct utility. \n\nCORE PROTOCOLS:\n1. DIRECTNESS: Provide the requested answer immediately. Skip all introductory phrases, 'luxury' descriptors (elite, bespoke, etc.), and concluding summaries unless they contain essential data.\n2. CLARIFICATION: If a request is broad, ambiguous, or lacks specific parameters (e.g., format, scope, target audience), you MUST pause and ask clarifying questions. Use the <options> format to provide 3-5 distinct paths for the user to choose from to ensure a correct result.\n3. FORMATTING: Wrap clarify options in: <options>{\"query\": \"Clarifying Question?\", \"options\": [\"Option A\", \"Option B\"]}</options>. Use GFM tables for data.\n4. CONCISENESS: Keep explanations minimal and strictly technical unless 'detailed explanation' is requested.";
+      
+      if (currentSession.studyMode) {
+        sysInstruction = "You are a patient and structured Study Assistant. Your goal is to guide the user towards understanding using educational best practices.\n\nSTUDY MODE PROTOCOLS:\n1. STEP-BY-STEP: Break down complex problems into logical, numbered steps.\n2. CONCEPT EXPLANATION: Briefly explain the underlying 'why' behind each step or answer.\n3. ANALOGIES: Use simple analogies where helpful to clarify difficult concepts.\n4. GUIDED LEARNING: Do not just give the final answer; show the methodology and thought process clearly.\n5. TONE: Maintain an encouraging, academic, yet clear and accessible tone.\n6. CLARIFICATION & FORMATTING: Keep the standard <options> and GFM table tools available for layout.";
+      }
+
       if (settings.maxOutputTokens !== undefined && settings.maxOutputTokens > 0) {
         sysInstruction += `\n5. TOKEN BUDGET: Strictly fit within ${settings.maxOutputTokens} tokens. Finish thoughts completely.`;
       }
@@ -1573,7 +1592,30 @@ export default function App() {
           </div>
           
           <div className="flex items-center gap-2">
-            
+            {activeSessionId && (
+              <button 
+                onClick={() => toggleStudyMode(activeSessionId)}
+                className={`flex items-center gap-2 px-3 py-1.5 rounded-full transition-all border ${
+                  getActiveSession()?.studyMode 
+                    ? 'bg-[var(--accent-app)]/10 border-[var(--accent-app)] text-[var(--accent-app)] shadow-[0_0_15px_rgba(59,130,246,0.2)]' 
+                    : 'bg-transparent border-[var(--border-app)] text-[var(--text-secondary)] hover:text-[var(--text-app)] hover:border-[var(--text-secondary)]'
+                }`}
+                title={getActiveSession()?.studyMode ? "Disable Study Mode" : "Enable Study Mode"}
+              >
+                <div className="relative">
+                  <GraduationCap size={16} />
+                  {getActiveSession()?.studyMode && (
+                    <motion.div 
+                      layoutId="study-indicator"
+                      className="absolute -top-1 -right-1 w-2 h-2 bg-[var(--accent-app)] rounded-full"
+                    />
+                  )}
+                </div>
+                <span className="text-[10px] font-black uppercase tracking-widest hidden sm:inline">
+                  {getActiveSession()?.studyMode ? "Study Mode ON" : "Study Mode"}
+                </span>
+              </button>
+            )}
           </div>
         </header>
 

@@ -27,6 +27,7 @@ export interface ChatSession {
   createdAt: number;
   updatedAt: number;
   isArchived?: boolean;
+  studyMode?: boolean;
 }
 
 export interface ProviderConfig {
