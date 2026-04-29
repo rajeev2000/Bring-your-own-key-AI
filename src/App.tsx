@@ -471,7 +471,7 @@ export default function App() {
     setError(null);
     const newSession: ChatSession = {
       id: generateId(),
-      title: 'New iluv session',
+      title: 'New Chat',
       messages: [],
       createdAt: Date.now(),
       updatedAt: Date.now()
@@ -522,19 +522,50 @@ export default function App() {
   };
 
   const generateSessionTitle = async (sessionId: string, currentInput: string, provider: any) => {
-    let generatedTitle = currentInput.slice(0, 30) + (currentInput.length > 30 ? '...' : '');
+    // Immediate local fallback
+    let generatedTitle = currentInput.slice(0, 40).trim() + (currentInput.length > 40 ? '...' : '');
+    
     try {
-      if (provider && provider.apiKey && provider.baseUrl.includes('generative')) {
+      if (!provider || !provider.apiKey) return;
+
+      const isGemini = provider.baseUrl.includes('generative');
+      const model = settings.model || DEFAULT_MODEL;
+
+      if (isGemini) {
         const ai = new GoogleGenAI({ 
           apiKey: provider.apiKey,
           httpOptions: provider.baseUrl !== DEFAULT_BASE_URL ? { baseUrl: provider.baseUrl } : undefined
         });
         const response = await ai.models.generateContent({
-          model: settings.model || 'gemini-2.5-flash', 
-          contents: [{ role: 'user', parts: [{ text: `Generate a short, concise, and accurate 2-4 word title for this chat based on this first message: "${currentInput}". ONLY output the title, no quotes or intro.` }] }]
+          model: model.includes('imagen') || model.includes('veo') ? 'gemini-3.1-flash-lite-preview' : model, 
+          contents: [{ role: 'user', parts: [{ text: `Summarize this first chat message into a very short, catchy title (max 5 words). Output ONLY the title text, nothing else: "${currentInput}"` }] }]
         });
         if (response.text?.trim()) {
-          generatedTitle = response.text.trim();
+          generatedTitle = response.text.trim().replace(/^["']|["']$/g, '');
+        }
+      } else {
+        // OpenAI compatible title generation
+        const base = cleanBaseUrl(provider.baseUrl);
+        const url = `${base}/v1/chat/completions`;
+        const res = await fetch(url, {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${provider.apiKey}`,
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify({
+            model: model,
+            messages: [{ role: 'user', content: `Summarize this first chat message into a very short, catchy title (max 5 words). Output ONLY the title text, nothing else: "${currentInput}"` }],
+            max_tokens: 20,
+            temperature: 0.5
+          })
+        });
+        if (res.ok) {
+          const data = await res.json();
+          const title = data.choices?.[0]?.message?.content?.trim();
+          if (title) {
+            generatedTitle = title.replace(/^["']|["']$/g, '');
+          }
         }
       }
     } catch (e) {
@@ -648,10 +679,13 @@ export default function App() {
       setPendingAttachments([]);
 
       let updatedSessions = [...sessions];
+      
+      const isFirstMessage = !activeSession || activeSession.messages.length === 0 || activeSession.title === 'New Chat' || activeSession.title === 'New iluv session';
+
       if (!activeSession) {
         const newSession: ChatSession = {
           id: sessionId,
-          title: currentInput.slice(0, 30) || 'New Session',
+          title: currentInput.slice(0, 40).trim() + (currentInput.length > 40 ? '...' : ''),
           messages: [userMessage],
           createdAt: Date.now(),
           updatedAt: Date.now()
@@ -659,19 +693,24 @@ export default function App() {
         updatedSessions = [newSession, ...sessions];
         setSessions(updatedSessions);
         setActiveSessionId(sessionId);
-        generateSessionTitle(sessionId, currentInput, provider);
       } else {
         updatedSessions = sessions.map(s => {
           if (s.id === sessionId) {
             return {
               ...s,
               messages: [...s.messages, userMessage],
-              updatedAt: Date.now()
+              updatedAt: Date.now(),
+              // Update title immediately if it's the first message or default title
+              title: isFirstMessage ? (currentInput.slice(0, 40).trim() + (currentInput.length > 40 ? '...' : '')) : s.title
             };
           }
           return s;
         });
         setSessions(updatedSessions);
+      }
+
+      if (isFirstMessage) {
+        generateSessionTitle(sessionId!, currentInput, provider);
       }
 
       const currentSession = updatedSessions.find(s => s.id === sessionId)!;
