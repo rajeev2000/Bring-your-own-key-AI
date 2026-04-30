@@ -118,6 +118,7 @@ export default function App() {
   const [pendingOptions, setPendingOptions] = useState<{ query: string; options: string[] } | null>(null);
   const [pendingAttachments, setPendingAttachments] = useState<Attachment[]>([]);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
   
   const [settings, setSettings] = useState<AppSettings>(() => {
     const saved = localStorage.getItem('iluv_settings');
@@ -331,6 +332,15 @@ export default function App() {
     window.addEventListener('error', handleError);
     return () => window.removeEventListener('error', handleError);
   }, []);
+
+  useEffect(() => {
+    if (textareaRef.current) {
+      const scrollPos = window.scrollY;
+      textareaRef.current.style.height = 'auto';
+      textareaRef.current.style.height = `${Math.min(textareaRef.current.scrollHeight, 200)}px`;
+      window.scrollTo(0, scrollPos);
+    }
+  }, [input]);
 
   useEffect(() => {
     try {
@@ -734,7 +744,7 @@ export default function App() {
       let sysInstruction = "You are a highly efficient AI assistant focused on 100% accuracy and direct utility. \n\nCORE PROTOCOLS:\n1. DIRECTNESS: Provide the requested answer immediately. Skip all introductory phrases, 'luxury' descriptors (elite, bespoke, etc.), and concluding summaries unless they contain essential data.\n2. CLARIFICATION: If a request is broad, ambiguous, or lacks specific parameters (e.g., format, scope, target audience), you MUST pause and ask clarifying questions. Use the <options> format to provide 3-5 distinct paths for the user to choose from to ensure a correct result.\n3. FORMATTING: Wrap clarify options in: <options>{\"query\": \"Clarifying Question?\", \"options\": [\"Option A\", \"Option B\"]}</options>. Use GFM tables for data.\n4. CONCISENESS: Keep explanations minimal and strictly technical unless 'detailed explanation' is requested.";
       
       if (currentSession.studyMode) {
-        sysInstruction = "You are a patient and structured Study Assistant. Your goal is to guide the user towards understanding using educational best practices.\n\nSTUDY MODE PROTOCOLS:\n1. STEP-BY-STEP: Break down complex problems into logical, numbered steps.\n2. CONCEPT EXPLANATION: Briefly explain the underlying 'why' behind each step or answer.\n3. ANALOGIES: Use simple analogies where helpful to clarify difficult concepts.\n4. GUIDED LEARNING: Do not just give the final answer; show the methodology and thought process clearly.\n5. TONE: Maintain an encouraging, academic, yet clear and accessible tone.\n6. CLARIFICATION & FORMATTING: Keep the standard <options> and GFM table tools available for layout.";
+        sysInstruction = "You are a patient and structured Study Assistant. Your goal is to guide the user towards understanding using educational best practices.\n\nSTUDY MODE PROTOCOLS:\n1. STRUCTURE: You MUST always output a structured response with clear Markdown headings for: 'Concept Explanation', 'Step-by-Step Breakdown', 'Guided Learning', and 'Analogy' (if applicable).\n2. AVOID NORMAL CHAT: Do NOT reply with a standard conversational response. ALWAYS use the structured format described above for every response.\n3. CONCEPT EXPLANATION: Briefly explain the underlying 'why' behind the topic or answer.\n4. STEP-BY-STEP: Break down complex problems into logical, numbered steps.\n5. GUIDED LEARNING: Do not just give the final answer; show the thought process clearly.\n6. TONE: Maintain an encouraging, academic, yet clear and accessible tone.\n7. CLARIFICATION & FORMATTING: Keep the standard <options> and GFM table tools available for layout.";
       }
 
       if (settings.maxOutputTokens !== undefined && settings.maxOutputTokens > 0) {
@@ -1668,6 +1678,17 @@ export default function App() {
                     ? 'bg-[var(--accent-app)] text-white rounded-3xl rounded-tr-none px-6 py-5 shadow-2xl shadow-[var(--accent-app)]/20' 
                     : 'bg-[var(--card-app)] border border-[var(--border-app)] rounded-3xl rounded-tl-none px-7 py-6 shadow-xl'
                 }`}>
+                  <button 
+                    onClick={() => copyToClipboard(m.content, m.id)}
+                    className={`absolute top-4 ${m.role === 'user' ? 'left-4' : 'right-4'} p-2 rounded-lg opacity-0 group-hover:opacity-100 transition-all ${
+                      m.role === 'user' 
+                        ? 'text-white/70 hover:text-white hover:bg-black/20' 
+                        : 'text-[var(--text-secondary)] hover:text-[var(--accent-app)] hover:bg-[var(--border-app)]'
+                    }`}
+                    title="Copy text"
+                  >
+                    {copiedId === m.id ? <Check size={14} className="text-green-500" /> : <Copy size={14} />}
+                  </button>
                   <div className={`markdown-body ${m.role === 'user' ? 'text-[var(--text-app)]' : 'text-[var(--text-app)]'}`}>
                     <ReactMarkdown 
                       remarkPlugins={[remarkGfm]}
@@ -1813,17 +1834,6 @@ export default function App() {
                    <div className={`flex flex-wrap items-center justify-between gap-y-2 mt-5 text-[11px] ${m.role === 'user' ? 'text-[var(--text-app)]/60' : 'text-[var(--text-secondary)]'}`}>
                      <span className="font-mono tracking-widest whitespace-nowrap">{new Date(m.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
                      <div className="flex items-center gap-2 flex-wrap justify-end">
-                        <button 
-                          onClick={() => copyToClipboard(m.content, m.id)}
-                          className={`p-2 rounded-lg transition-all ${
-                            m.role === 'user' 
-                              ? 'hover:bg-[var(--card-app)]/10' 
-                              : 'hover:bg-[var(--border-app)]'
-                          } text-[var(--accent-app)]`}
-                          title="Copy text"
-                        >
-                          {copiedId === m.id ? <Check size={12} className="text-green-500" /> : <Copy size={12} />}
-                        </button>
                         {m.role === 'assistant' && (
                           m.content.includes('```recharts') ? (
                             <button onClick={() => generateVisualReportForMessage(m)} className="px-3 py-1.5 hover:bg-[var(--border-app)] rounded-lg transition-all text-[var(--accent-app)] font-bold uppercase tracking-widest text-[9px] border border-[var(--accent-app)]/20">
@@ -2042,17 +2052,13 @@ export default function App() {
                   />
                 </div>
                 <textarea 
+                  ref={textareaRef}
                   value={input}
-                  onChange={(e) => {
-                    setInput(e.target.value);
-                    e.target.style.height = 'auto';
-                    e.target.style.height = Math.min(e.target.scrollHeight, 200) + 'px';
-                  }}
+                  onChange={(e) => setInput(e.target.value)}
                   onKeyDown={(e) => {
                     if (e.key === 'Enter' && !e.shiftKey) {
                       e.preventDefault();
                       handleSendMessage();
-                      e.currentTarget.style.height = 'auto';
                     }
                   }}
                   placeholder="Initiate sequence..."
