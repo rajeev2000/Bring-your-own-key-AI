@@ -5,13 +5,13 @@
 
 @layer base {
   :root {
-    --bg-app: #000000;
-    --text-app: #ffffff;
-    --accent-app: #0070f3; /* Premium blue */
-    --border-app: #111111;
-    --card-app: #0a0a0a;
-    --text-secondary: #a1a1aa;
-    color-scheme: dark;
+    --bg-app: #f8f9fa;
+    --text-app: #27272a;
+    --accent-app: #52525b; /* Restrained slate/zinc accent */
+    --border-app: #e5e7eb;
+    --card-app: #ffffff;
+    --text-secondary: #71717a;
+    color-scheme: light;
   }
 
   body {
@@ -33,25 +33,36 @@
 }
 
 .markdown-body table {
-  @apply w-full border-collapse border border-[#111111] my-8 rounded-xl overflow-hidden;
+  @apply w-full border-collapse my-8 rounded-xl overflow-hidden;
+  border: 1px solid var(--border-app);
   display: block;
   overflow-x: auto;
 }
 
 .markdown-body th {
-  @apply bg-[#0a0a0a] border border-[#111111] p-4 text-left font-black text-[10px] uppercase tracking-[0.2em] text-[#3b82f6];
+  @apply p-4 text-left font-semibold text-xs tracking-[0.1em] uppercase;
+  background-color: var(--card-app);
+  border: 1px solid var(--border-app);
+  color: var(--accent-app);
 }
 
 .markdown-body td {
-  @apply border border-[#111111] p-4 text-sm text-[#d1d1d6];
+  @apply p-4 text-sm;
+  border: 1px solid var(--border-app);
+  color: var(--text-secondary);
 }
 
 .markdown-body code {
-  @apply font-mono bg-[#111111] text-[#3b82f6] px-1.5 py-0.5 rounded-md text-xs;
+  @apply font-mono px-1.5 py-0.5 rounded-md text-xs;
+  background-color: var(--border-app);
+  color: var(--accent-app);
 }
 
 .markdown-body pre {
-  @apply bg-[#0a0a0a] border border-[#111111] text-white p-6 overflow-x-auto my-6 rounded-2xl shadow-2xl;
+  @apply p-6 overflow-x-auto my-6 rounded-xl shadow-sm;
+  background-color: var(--card-app);
+  border: 1px solid var(--border-app);
+  color: var(--text-app);
 }
 
 .markdown-body pre code {
@@ -59,11 +70,14 @@
 }
 
 .markdown-body ul, .markdown-body ol {
-  @apply my-4 ml-6 list-disc;
+  @apply my-4 ml-6 list-disc text-[var(--text-app)];
 }
 
 .markdown-body blockquote {
-  @apply border-l-4 border-[#3b82f6] pl-6 my-6 italic text-[#a1a1aa] bg-[#0a0a0a] py-4 pr-4 rounded-r-xl;
+  @apply border-l-4 pl-6 my-6 italic py-4 pr-4 rounded-r-xl;
+  border-color: var(--border-app);
+  color: var(--text-secondary);
+  background-color: var(--card-app);
 }
 
 .scroll-hide::-webkit-scrollbar {

@@ -34,6 +34,7 @@ import {
   Archive,
   Combine,
   FolderDown,
+  FolderUp,
   GraduationCap,
   BookOpen
 } from 'lucide-react';
@@ -47,6 +48,7 @@ import { Document, Packer, Paragraph, TextRun } from 'docx';
 import { LineChart, Line, BarChart, Bar, PieChart, Pie, AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip as RechartsTooltip, Legend, ResponsiveContainer } from 'recharts';
 
 import { Message, ChatSession, AppSettings, DEFAULT_MODEL, DEFAULT_BASE_URL, Attachment } from './types';
+import { NotificationSystem } from './lib/NotificationSystem';
 
 const generateId = () => {
   try {
@@ -108,6 +110,7 @@ export default function App() {
   const [loadingSessions, setLoadingSessions] = useState<Set<string>>(new Set());
   const [error, setError] = useState<string | null>(null);
   const [showSettings, setShowSettings] = useState(false);
+  const [restoreAsMemory, setRestoreAsMemory] = useState(false);
   const [showManageSessions, setShowManageSessions] = useState(false);
   const [selectedSessionIds, setSelectedSessionIds] = useState<Set<string>>(new Set());
   const [sidebarOpen, setSidebarOpen] = useState(true);
@@ -144,6 +147,7 @@ export default function App() {
       if (!parsed.activeProviderId || (parsed.activeProviderId !== 'gemini' && parsed.activeProviderId !== 'openai')) {
          parsed.activeProviderId = 'gemini';
       }
+      parsed.themePreset = 'light';
       return parsed;
     }
     return {
@@ -165,7 +169,7 @@ export default function App() {
       ],
       activeProviderId: 'gemini',
       model: DEFAULT_MODEL,
-      theme: 'system',
+      themePreset: 'light',
       maxOutputTokens: 2048
     };
   });
@@ -248,6 +252,356 @@ export default function App() {
       console.error(`Failed to fetch models for ${provider.name}`, err);
     }
   };
+
+  // --- Background Job Worker ---
+  const processingJobRef = useRef<boolean>(false);
+  useEffect(() => {
+    NotificationSystem.requestPermission();
+
+    const engagementInterval = setInterval(() => {
+      NotificationSystem.checkAndSendEngagementNotification();
+    }, 60000); // Check every minute
+
+    const workerInterval = setInterval(async () => {
+      if (processingJobRef.current) return;
+
+      let jobs: any[] = [];
+      try {
+        jobs = JSON.parse(localStorage.getItem('iluv_jobs') || '[]');
+      } catch (e) {
+        return;
+      }
+
+      const now = Date.now();
+      // Retry stuck jobs after 2 minutes
+      jobs = jobs.map(j => {
+        if (j.status === 'processing' && (now - (j.lastAttempt || j.startedAt) > 120000)) {
+          return { ...j, status: 'pending' };
+        }
+        return j;
+      });
+
+      const job: any = jobs.find(j => j.status === 'pending');
+      if (!job) {
+        localStorage.setItem('iluv_jobs', JSON.stringify(jobs));
+        return;
+      }
+
+      processingJobRef.current = true;
+      job.status = 'processing';
+      job.lastAttempt = now;
+      localStorage.setItem('iluv_jobs', JSON.stringify(jobs));
+
+      setLoadingSessions(prev => new Set(prev).add(job.sessionId));
+
+      try {
+        const { id: assistantMessageId, sessionId, model, provider, settings: jobSettings, sysInstruction, history } = job;
+        const isGemini = provider.baseUrl.includes('generative');
+        const startTime = Date.now();
+        let fullText = '';
+        let finalTokens = 0;
+        let generatedAttachments: any[] = [];
+
+        if (isGemini) {
+          const ai = new GoogleGenAI({ 
+            apiKey: provider.apiKey,
+            httpOptions: provider.baseUrl !== DEFAULT_BASE_URL ? { baseUrl: provider.baseUrl } : undefined
+          });
+          
+          let isImagen = model.toLowerCase().includes('imagen') || model.toLowerCase().includes('nano') || model.toLowerCase().includes('image');
+          let imagenSuccess = false;
+
+          if (isImagen) {
+            try {
+              const promptMsg = history[history.length - 1].content || 'A beautiful image';
+              const response = await ai.models.generateImages({
+                model: model,
+                prompt: promptMsg,
+                config: { numberOfImages: 1, outputMimeType: 'image/jpeg', aspectRatio: '1:1' },
+              });
+              
+              if (response.generatedImages && response.generatedImages[0]) {
+                generatedAttachments.push({
+                   name: `imagen_${Date.now()}.jpeg`,
+                   type: 'image/jpeg',
+                   data: response.generatedImages[0].image.imageBytes,
+                   isText: false
+                });
+                fullText = "";
+                imagenSuccess = true;
+              } else {
+                throw new Error("Model failed to return an image asset.");
+              }
+
+              setSessions(prev => prev.map(s => s.id === sessionId ? {
+                  ...s,
+                  messages: s.messages.map(m => m.id === assistantMessageId ? { 
+                    ...m, content: fullText, modelUsed: model, attachments: generatedAttachments.length > 0 ? generatedAttachments : undefined
+                  } : m),
+                  updatedAt: Date.now()
+                } : s));
+            } catch (e: any) {
+              if (e && e.message && (e.message.includes('predict') || e.message.includes('not supported') || e.message.includes('404'))) {
+                console.warn("generateImages failed, falling back to generateContentStream...", e);
+                imagenSuccess = false;
+                isImagen = false;
+              } else throw e;
+            }
+          }
+          
+          if (!isImagen || !imagenSuccess) {
+            const apiHistory = history.map((m: any) => {
+              const parts: any[] = [{ text: m.content || '' }];
+              if (m.attachments) {
+                m.attachments.forEach((att: any) => {
+                  if (att.isText) {
+                    parts.push({ text: `\n[FILE: ${att.name}]\n${att.content}\n[END FILE]` });
+                  } else {
+                    parts.push({ inlineData: { data: att.data, mimeType: att.type } });
+                  }
+                });
+              }
+              return { role: m.role === 'assistant' ? 'model' : m.role, parts };
+            });
+
+            const configOpts: any = { systemInstruction: sysInstruction };
+            if (jobSettings.temperature !== undefined) configOpts.temperature = Number(jobSettings.temperature);
+            if (jobSettings.maxOutputTokens !== undefined) configOpts.maxOutputTokens = Number(jobSettings.maxOutputTokens);
+
+            const responseStream = await ai.models.generateContentStream({
+              model: model,
+              contents: apiHistory,
+              config: configOpts
+            });
+
+            for await (const chunk of responseStream) {
+              fullText += (chunk.text || '');
+              if (chunk.usageMetadata) finalTokens = chunk.usageMetadata.candidatesTokenCount || 0;
+              
+              if (chunk.candidates?.[0]?.content?.parts) {
+                chunk.candidates[0].content.parts.forEach((p: any) => {
+                  if (p.inlineData?.data) {
+                    let inferredExt = 'png';
+                    let inferredType = p.inlineData.mimeType || 'image/png';
+                    if (inferredType.startsWith('video/')) inferredExt = 'mp4';
+                    else if (inferredType.includes('jpeg')) inferredExt = 'jpg';
+                    else if (inferredType.includes('webp')) inferredExt = 'webp';
+
+                    generatedAttachments.push({
+                       name: `generated_${Date.now()}.${inferredExt}`,
+                       type: inferredType,
+                       data: p.inlineData.data,
+                       isText: false
+                    });
+                  }
+                });
+              }
+
+              setSessions(prev => prev.map(s => s.id === sessionId ? {
+                  ...s,
+                  messages: s.messages.map(m => m.id === assistantMessageId ? { 
+                    ...m, content: fullText.replace(/<options>.*?<\/options>/s, '').trim(), modelUsed: model, attachments: generatedAttachments.length > 0 ? generatedAttachments : undefined
+                  } : m),
+                  updatedAt: Date.now()
+                } : s));
+            }
+
+            if (fullText.includes('<options>')) {
+              const match = fullText.match(/<options>(.*?)<\/options>/s);
+              if (match && match[1]) {
+                try {
+                  setPendingOptions(JSON.parse(match[1]));
+                } catch(e) {}
+              }
+            }
+          }
+        } else {
+          // OpenAI-compatible via Proxy
+          const isLegacyModel = model.toLowerCase().includes('instruct') || model.toLowerCase().includes('davinci') || model.toLowerCase().includes('curie') || model.toLowerCase().includes('babbage') || model.toLowerCase().includes('ada');
+          const isO1Model = model.toLowerCase().startsWith('o1') || model.toLowerCase().startsWith('o3') || model.toLowerCase().startsWith('o4') || model.toLowerCase().includes('thinking') || model.toLowerCase().includes('reasoning') || model.toLowerCase().includes('latest');
+          const isImageModel = model.toLowerCase().includes('dall-e') || model.toLowerCase().includes('image') || model.toLowerCase().includes('video') || model.toLowerCase().includes('sora') || model.toLowerCase().includes('runway') || model.toLowerCase().includes('luma') || model.toLowerCase().includes('veo') || model.toLowerCase().includes('kling') || model.toLowerCase().includes('minimax') || model.toLowerCase().includes('hailuo') || model.toLowerCase().includes('pika') || model.toLowerCase().includes('haiper');
+
+          const apiMessages = [
+            { role: 'system', content: sysInstruction },
+            ...history.map((m: any) => {
+              let content = m.content;
+              if (m.attachments) {
+                m.attachments.forEach((att: any) => {
+                  if (att.isText) content += `\n[FILE: ${att.name}]\n${att.content}\n[END FILE]`;
+                  else if (att.data) content += `\n[${att.type.startsWith('image/') ? 'IMAGE' : 'FILE'} ATTACHED: ${att.name}]`;
+                });
+              }
+              return { role: m.role, content };
+            })
+          ];
+
+          const base = cleanBaseUrl(provider.baseUrl);
+          const endpoint = isImageModel ? 'images/generations' : (isLegacyModel ? 'completions' : 'chat/completions');
+          const url = `${base}/v1/${endpoint}`;
+
+          const tokenLimit = isLegacyModel ? 4096 : (model.includes('gpt-4') ? 8192 : 4096);
+          let maxTokens = jobSettings.maxOutputTokens ?? 2048;
+          if (maxTokens > tokenLimit) maxTokens = tokenLimit;
+
+          const requestBody: any = { model };
+          if (!isImageModel) requestBody.temperature = isO1Model ? 1 : (jobSettings.temperature ?? 0.7);
+
+          if (isImageModel) {
+            requestBody.prompt = history[history.length - 1].content || 'A beautiful image';
+            if (!model.toLowerCase().includes('video') && !model.toLowerCase().includes('runway') && !model.toLowerCase().includes('luma') && !model.toLowerCase().includes('sora') && !model.toLowerCase().includes('kling') && !model.toLowerCase().includes('veo') && !model.toLowerCase().includes('hailuo') && !model.toLowerCase().includes('minimax')) {
+              requestBody.n = 1;
+              requestBody.size = "1024x1024";
+            }
+          } else if (isLegacyModel) {
+            requestBody.prompt = apiMessages.map(m => `${m.role === 'system' ? 'Instruction' : m.role.charAt(0).toUpperCase() + m.role.slice(1)}: ${m.content}`).join('\n') + '\nAssistant: ';
+            requestBody.max_tokens = maxTokens;
+          } else {
+            requestBody.messages = apiMessages;
+            if (isO1Model) requestBody.max_completion_tokens = maxTokens;
+            else requestBody.max_tokens = maxTokens;
+          }
+
+          const res = await fetch(url, {
+            method: 'POST',
+            headers: {
+              'Authorization': `Bearer ${provider.apiKey}`,
+              'Content-Type': 'application/json'
+            },
+            body: JSON.stringify(requestBody)
+          });
+
+          const contentType = res.headers.get('content-type');
+          const isJson = contentType && contentType.includes('application/json');
+
+          if (!res.ok) {
+            let errorBody = '';
+            if (isJson) {
+              const errData = await res.json();
+              errorBody = errData.error?.message || errData.message || JSON.stringify(errData);
+            } else {
+              errorBody = await res.text();
+            }
+            throw new Error(errorBody ? `${res.status}: ${errorBody.slice(0, 500)}` : `Failed to fetch from provider (${res.status})`);
+          }
+
+          if (!isJson) throw new Error('Endpoint returned success but response was not JSON. Please check your Base URL.');
+
+          const data = await res.json();
+          console.log('OpenAI-compatible Raw Response:', data);
+          
+          if (isImageModel) {
+            const item = (data.data && data.data[0]) ? data.data[0] : data;
+            let b64 = item.b64_json;
+            let resultUrl = item.url || item.video_url || item.image_url;
+            
+            if (b64 || resultUrl) {
+              let mimeType = 'image/png';
+              let fileExt = 'png';
+              
+              if (!b64 && resultUrl) {
+                const imgRes = await fetch(resultUrl);
+                const blob = await imgRes.blob();
+                mimeType = blob.type || 'image/png';
+                if (mimeType.startsWith('video/')) fileExt = 'mp4';
+                else if (mimeType.includes('jpeg')) fileExt = 'jpg';
+                else if (mimeType.includes('webp')) fileExt = 'webp';
+                
+                const blobToBase64 = (b: Blob): Promise<string> => new Promise((resolve, reject) => {
+                  const reader = new FileReader();
+                  reader.onloadend = () => resolve((reader.result as string).split(',')[1]);
+                  reader.onerror = reject;
+                  reader.readAsDataURL(b);
+                });
+                b64 = await blobToBase64(blob);
+              }
+              if (b64) {
+                generatedAttachments.push({
+                   name: `generated_${Date.now()}.${fileExt}`,
+                   type: mimeType,
+                   data: b64,
+                   isText: false
+                });
+                fullText = ""; 
+              } else throw new Error("Failed to extract media from response (no b64_json found after fetch).");
+            } else throw new Error("Model response did not contain image data (URL or B64). Raw: " + JSON.stringify(data).slice(0, 200));
+          } else if (isLegacyModel) {
+            fullText = data.choices?.[0]?.text || '';
+            finalTokens = data.usage?.completion_tokens || 0;
+          } else {
+            fullText = data.choices?.[0]?.message?.content || '';
+            finalTokens = data.usage?.completion_tokens || data.usage?.total_tokens || 0;
+          }
+
+          if (fullText.includes('<options>')) {
+            const match = fullText.match(/<options>(.*?)<\/options>/s);
+            if (match && match[1]) {
+              try {
+                setPendingOptions(JSON.parse(match[1]));
+                fullText = fullText.replace(/<options>.*?<\/options>/s, '').trim();
+              } catch(e) {}
+            }
+          }
+
+          setSessions(prev => prev.map(s => s.id === sessionId ? {
+              ...s,
+              messages: s.messages.map(m => m.id === assistantMessageId ? { 
+                ...m, content: fullText, isStreaming: false, attachments: generatedAttachments.length > 0 ? generatedAttachments : undefined
+              } : m),
+              updatedAt: Date.now()
+            } : s));
+        }
+        
+        const responseTime = (Date.now() - startTime) / 1000;
+
+        setSessions(prev => prev.map(s => s.id === sessionId ? {
+            ...s,
+            messages: s.messages.map(m => m.id === assistantMessageId ? { 
+              ...m, isStreaming: false, tokenCount: finalTokens || undefined, modelUsed: model, responseTime 
+            } : m),
+            updatedAt: Date.now()
+          } : s));
+
+        // Delete successful job
+        const updatedJobs = JSON.parse(localStorage.getItem('iluv_jobs') || '[]').filter((j: any) => j.id !== job.id);
+        localStorage.setItem('iluv_jobs', JSON.stringify(updatedJobs));
+
+        NotificationSystem.sendSuccessNotification("iluv Task Complete", `The response for "${history[history.length - 1]?.content?.slice(0, 30) || 'your prompt'}..." is ready.`);
+
+      } catch (err: any) {
+        console.error("Job failed:", err);
+        const currentJobs = JSON.parse(localStorage.getItem('iluv_jobs') || '[]');
+        const idx = currentJobs.findIndex((j: any) => j.id === job.id);
+        if (idx !== -1) {
+          currentJobs[idx].status = 'pending';
+          currentJobs[idx].retries = (currentJobs[idx].retries || 0) + 1;
+          
+          if (currentJobs[idx].retries > 3) {
+            // Hard fail, discard job
+            currentJobs.splice(idx, 1);
+            setSessions(prev => prev.map(s => s.id === job.sessionId ? {
+              ...s,
+              messages: s.messages.map(m => m.id === job.id ? { 
+                ...m, content: `System Error: Job exceeded retries. ${err.message}`, isStreaming: false
+              } : m)
+            } : s));
+          }
+          localStorage.setItem('iluv_jobs', JSON.stringify(currentJobs));
+        }
+      } finally {
+        setLoadingSessions(prev => {
+          const next = new Set(prev);
+          next.delete(job.sessionId);
+          return next;
+        });
+        processingJobRef.current = false;
+      }
+    }, 1500);
+
+    return () => {
+      clearInterval(workerInterval);
+      clearInterval(engagementInterval);
+    };
+  }, []);
 
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = e.target.files;
@@ -359,54 +713,29 @@ export default function App() {
       dark: {
         '--bg-app': '#000000',
         '--text-app': '#ffffff',
-        '--accent-app': '#0070f3',
-        '--border-app': '#111111',
-        '--card-app': '#0a0a0a',
+        '--accent-app': '#d4d4d8',
+        '--border-app': '#27272a',
+        '--card-app': '#09090b',
         '--text-secondary': '#a1a1aa',
         'color-scheme': 'dark'
       },
       light: {
-        '--bg-app': '#fafafa',
-        '--text-app': '#18181b',
-        '--accent-app': '#0070f3',
-        '--border-app': '#e4e4e7',
+        '--bg-app': '#f8f9fa',
+        '--text-app': '#27272a',
+        '--accent-app': '#52525b',
+        '--border-app': '#e5e7eb',
         '--card-app': '#ffffff',
-        '--text-secondary': 'var(--text-secondary)',
+        '--text-secondary': '#71717a',
         'color-scheme': 'light'
-      },
-      midnight: {
-        '--bg-app': '#0f172a',
-        '--text-app': '#f1f5f9',
-        '--accent-app': '#38bdf8',
-        '--border-app': '#1e293b',
-        '--card-app': '#0f172a',
-        '--text-secondary': '#94a3b8',
-        'color-scheme': 'dark'
-      },
-      hacker: {
-        '--bg-app': '#000000',
-        '--text-app': '#4ade80',
-        '--accent-app': '#22c55e',
-        '--border-app': '#14532d',
-        '--card-app': '#000000',
-        '--text-secondary': '#bbf7d0',
-        'color-scheme': 'dark'
       }
     };
 
-    const preset = settings.themePreset || 'dark';
-    const themeColors = THEMES[preset] || THEMES.dark;
+    const preset = settings.themePreset || 'light';
+    const themeColors = THEMES[preset] || THEMES.light;
 
     Object.entries(themeColors).forEach(([key, value]) => {
       root.style.setProperty(key, value);
     });
-
-    if (preset === 'custom' && settings.customColors) {
-      if (settings.customColors.bgApp) root.style.setProperty('--bg-app', settings.customColors.bgApp);
-      if (settings.customColors.bgApp) root.style.setProperty('--card-app', settings.customColors.bgApp);
-      if (settings.customColors.textApp) root.style.setProperty('--text-app', settings.customColors.textApp);
-      if (settings.customColors.accentApp) root.style.setProperty('--accent-app', settings.customColors.accentApp);
-    }
 
     if (preset === 'light') {
       root.classList.remove('dark');
@@ -465,14 +794,50 @@ export default function App() {
     setSelectedSessionIds(new Set());
   };
 
-  const handleExportSelectedSessions = () => {
-    const sessionsToExport = sessions.filter(s => selectedSessionIds.has(s.id));
+  const handleExportSessions = (exportAll: boolean = false) => {
+    const sessionsToExport = exportAll ? sessions : sessions.filter(s => selectedSessionIds.has(s.id));
+    if (sessionsToExport.length === 0) return;
     const dataStr = "data:text/json;charset=utf-8," + encodeURIComponent(JSON.stringify(sessionsToExport, null, 2));
     const a = document.createElement('a');
     a.href = dataStr;
     a.download = `iluv_sessions_export_${Date.now()}.json`;
     a.click();
     setSelectedSessionIds(new Set());
+  };
+
+  const handleRestoreSessions = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    const reader = new FileReader();
+    reader.onload = (event) => {
+      try {
+        const text = event.target?.result as string;
+        const parsed = JSON.parse(text) as ChatSession[];
+        
+        if (!Array.isArray(parsed) || !parsed[0]?.id) throw new Error("Invalid backup format");
+
+        if (restoreAsMemory) {
+          const formattedMemory = parsed.map(s => `CHAT [${s.title}]:\n` + s.messages.map(m => `${m.role.toUpperCase()}: ${m.content}`).join('\n')).join('\n\n');
+          setSettings(prev => ({
+            ...prev,
+            chatMemory: (prev.chatMemory ? prev.chatMemory + '\n\n' : '') + formattedMemory
+          }));
+          alert('Chat data successfully loaded into memory context!');
+        } else {
+          // Add to existing sessions without overriding existing unique IDs
+          const existingIds = new Set(sessions.map(s => s.id));
+          const toAdd = parsed.filter(s => !existingIds.has(s.id));
+          setSessions(prev => [...toAdd, ...prev].sort((a, b) => b.createdAt - a.createdAt));
+          alert(`Restored ${toAdd.length} new sessions.`);
+        }
+      } catch (err) {
+        console.error("Failed to restore sessions", err);
+        alert('Failed to restore sessions. Invalid file format.');
+      }
+      e.target.value = ''; // reset
+    };
+    reader.readAsText(file);
   };
 
   // --- End session management ---
@@ -624,6 +989,8 @@ export default function App() {
     if (!finalInput.trim()) return;
     if (isSessionLoading(activeSessionId)) return;
     
+    NotificationSystem.logActivity();
+    
     setPendingOptions(null);
 
     // Cache hit check (only if not an override from a previous choice)
@@ -751,6 +1118,10 @@ export default function App() {
         sysInstruction += `\n5. TOKEN BUDGET: Strictly fit within ${settings.maxOutputTokens} tokens. Finish thoughts completely.`;
       }
 
+      if (settings.chatMemory) {
+        sysInstruction += `\n\nBACKGROUND MEMORY: Below is context from past restored sessions for your reference:\n${settings.chatMemory}\n`;
+      }
+
       const startTime = Date.now();
       let fullText = '';
       let finalTokens = 0;
@@ -777,351 +1148,29 @@ export default function App() {
         return s;
       }));
 
-      if (isGemini) {
-        const ai = new GoogleGenAI({ 
-          apiKey: provider.apiKey,
-          httpOptions: provider.baseUrl !== DEFAULT_BASE_URL ? { baseUrl: provider.baseUrl } : undefined
-        });
-        
-        let isImagen = model.toLowerCase().includes('imagen') || model.toLowerCase().includes('nano') || model.toLowerCase().includes('image');
-        let imagenSuccess = false;
+      const job = {
+         id: assistantMessageId,
+         sessionId,
+         model,
+         provider,
+         settings,
+         sysInstruction,
+         history: currentSession.messages,
+         startedAt: Date.now(),
+         status: 'pending',
+         retries: 0
+      };
 
-        if (isImagen) {
-          try {
-            const promptMsg = currentSession.messages[currentSession.messages.length - 1].content || 'A beautiful image';
-            const response = await ai.models.generateImages({
-              model: model,
-              prompt: promptMsg,
-              config: {
-                numberOfImages: 1,
-                outputMimeType: 'image/jpeg',
-                aspectRatio: '1:1',
-              },
-            });
-            
-            console.log('Gemini Image Generation Raw Response:', response);
-            
-            if (response.generatedImages && response.generatedImages[0]) {
-              const base64EncodeString = response.generatedImages[0].image.imageBytes;
-              generatedAttachments.push({
-                 name: `imagen_${Date.now()}.jpeg`,
-                 type: 'image/jpeg',
-                 data: base64EncodeString,
-                 isText: false
-              });
-              fullText = ""; // Clear text as per requirement
-              imagenSuccess = true;
-            } else {
-              throw new Error("Model failed to return an image asset.");
-            }
-
-            setSessions(prev => prev.map(s => {
-              if (s.id === sessionId) {
-                return {
-                  ...s,
-                  messages: s.messages.map(m => m.id === assistantMessageId ? { 
-                    ...m, 
-                    content: fullText,
-                    modelUsed: model,
-                    attachments: generatedAttachments.length > 0 ? generatedAttachments : undefined
-                  } : m),
-                  updatedAt: Date.now()
-                };
-              }
-              return s;
-            }));
-          } catch (e: any) {
-            if (e && e.message && (e.message.includes('predict') || e.message.includes('not supported') || e.message.includes('404'))) {
-              console.warn("generateImages predict method unsupported or 404, falling back to generateContentStream...", e);
-              imagenSuccess = false;
-              isImagen = false;
-            } else {
-              throw e;
-            }
-          }
-        }
-        
-        if (!isImagen || !imagenSuccess) {
-          const history = currentSession.messages.map(m => {
-            const parts: any[] = [{ text: m.content || '' }];
-            if (m.attachments) {
-              m.attachments.forEach(att => {
-                if (att.isText) {
-                  parts.push({ text: `\n[FILE: ${att.name}]\n${att.content}\n[END FILE]` });
-                } else {
-                  parts.push({
-                    inlineData: {
-                      data: att.data,
-                      mimeType: att.type
-                    }
-                  });
-                }
-              });
-            }
-            return {
-              role: m.role === 'assistant' ? 'model' : m.role,
-              parts
-            };
-          });
-
-          const configOpts: any = {
-            systemInstruction: sysInstruction
-          };
-          if (settings.temperature !== undefined) configOpts.temperature = Number(settings.temperature);
-          if (settings.maxOutputTokens !== undefined) configOpts.maxOutputTokens = Number(settings.maxOutputTokens);
-
-          const responseStream = await ai.models.generateContentStream({
-            model: model,
-            contents: history,
-            config: configOpts
-          });
-
-          for await (const chunk of responseStream) {
-            fullText += (chunk.text || '');
-            if (chunk.usageMetadata) finalTokens = chunk.usageMetadata.candidatesTokenCount || 0;
-            
-            if (chunk.candidates?.[0]?.content?.parts) {
-              chunk.candidates[0].content.parts.forEach(p => {
-                if (p.inlineData?.data) {
-                  let inferredExt = 'png';
-                  let inferredType = p.inlineData.mimeType || 'image/png';
-                  if (inferredType.startsWith('video/')) inferredExt = 'mp4';
-                  else if (inferredType.includes('jpeg')) inferredExt = 'jpg';
-                  else if (inferredType.includes('webp')) inferredExt = 'webp';
-
-                  generatedAttachments.push({
-                     name: `generated_${Date.now()}.${inferredExt}`,
-                     type: inferredType,
-                     data: p.inlineData.data,
-                     isText: false
-                  });
-                }
-              });
-            }
-
-            setSessions(prev => prev.map(s => {
-              if (s.id === sessionId) {
-                return {
-                  ...s,
-                  messages: s.messages.map(m => m.id === assistantMessageId ? { 
-                    ...m, 
-                    content: fullText.replace(/<options>.*?<\/options>/s, '').trim(),
-                    modelUsed: model,
-                    attachments: generatedAttachments.length > 0 ? generatedAttachments : undefined
-                  } : m),
-                  updatedAt: Date.now()
-                };
-              }
-              return s;
-            }));
-          }
-
-          if (fullText.includes('<options>')) {
-            const match = fullText.match(/<options>(.*?)<\/options>/s);
-            if (match && match[1]) {
-              try {
-                const parsed = JSON.parse(match[1]);
-                setPendingOptions(parsed);
-              } catch(e) {}
-            }
-          }
-        }
-      } else {
-        // OpenAI-compatible via Proxy
-        const isLegacyModel = model.toLowerCase().includes('instruct') || 
-                            model.toLowerCase().includes('davinci') || 
-                            model.toLowerCase().includes('curie') || 
-                            model.toLowerCase().includes('babbage') || 
-                            model.toLowerCase().includes('ada');
-        
-        const isO1Model = model.toLowerCase().startsWith('o1') || 
-                          model.toLowerCase().startsWith('o3') || 
-                          model.toLowerCase().startsWith('o4') || 
-                          model.toLowerCase().includes('thinking') ||
-                          model.toLowerCase().includes('reasoning') ||
-                          model.toLowerCase().includes('latest');
-
-        const isImageModel = model.toLowerCase().includes('dall-e') || model.toLowerCase().includes('image') || model.toLowerCase().includes('video') || model.toLowerCase().includes('sora') || model.toLowerCase().includes('runway') || model.toLowerCase().includes('luma') || model.toLowerCase().includes('veo') || model.toLowerCase().includes('kling') || model.toLowerCase().includes('minimax') || model.toLowerCase().includes('hailuo') || model.toLowerCase().includes('pika') || model.toLowerCase().includes('haiper');
-
-        const messages = [
-          { role: 'system', content: sysInstruction },
-          ...currentSession.messages.map(m => {
-            let content = m.content;
-            if (m.attachments) {
-              m.attachments.forEach(att => {
-                if (att.isText) {
-                  content += `\n[FILE: ${att.name}]\n${att.content}\n[END FILE]`;
-                } else if (att.data) {
-                  const label = att.type.startsWith('image/') ? 'IMAGE' : 'FILE';
-                  content += `\n[${label} ATTACHED: ${att.name}]`;
-                }
-              });
-            }
-            return { role: m.role, content };
-          })
-        ];
-
-        const base = cleanBaseUrl(provider.baseUrl);
-        const endpoint = isImageModel ? 'images/generations' : (isLegacyModel ? 'completions' : 'chat/completions');
-        const url = `${base}/v1/${endpoint}`;
-
-        const tokenLimit = isLegacyModel ? 4096 : (model.includes('gpt-4') ? 8192 : 4096);
-        let maxTokens = settings.maxOutputTokens ?? 2048;
-        if (maxTokens > tokenLimit) maxTokens = tokenLimit;
-
-        const requestBody: any = {
-          model
-        };
-        
-        if (!isImageModel) {
-          requestBody.temperature = isO1Model ? 1 : (settings.temperature ?? 0.7);
-        }
-
-        if (isImageModel) {
-          requestBody.prompt = currentSession.messages[currentSession.messages.length - 1].content || 'A beautiful image';
-          if (!model.toLowerCase().includes('video') && !model.toLowerCase().includes('runway') && !model.toLowerCase().includes('luma') && !model.toLowerCase().includes('sora') && !model.toLowerCase().includes('kling') && !model.toLowerCase().includes('veo') && !model.toLowerCase().includes('hailuo') && !model.toLowerCase().includes('minimax')) {
-            requestBody.n = 1;
-            requestBody.size = "1024x1024";
-          }
-        } else if (isLegacyModel) {
-          requestBody.prompt = messages.map(m => `${m.role === 'system' ? 'Instruction' : m.role.charAt(0).toUpperCase() + m.role.slice(1)}: ${m.content}`).join('\n') + '\nAssistant: ';
-          requestBody.max_tokens = maxTokens;
-        } else {
-          requestBody.messages = messages;
-          if (isO1Model) {
-            requestBody.max_completion_tokens = maxTokens;
-          } else {
-            requestBody.max_tokens = maxTokens;
-          }
-        }
-
-        const res = await fetch(url, {
-          method: 'POST',
-          headers: {
-            'Authorization': `Bearer ${provider.apiKey}`,
-            'Content-Type': 'application/json'
-          },
-          body: JSON.stringify(requestBody)
-        });
-
-        const contentType = res.headers.get('content-type');
-        const isJson = contentType && contentType.includes('application/json');
-
-        if (!res.ok) {
-          let errorBody = '';
-          if (isJson) {
-            const errData = await res.json();
-            errorBody = errData.error?.message || errData.message || JSON.stringify(errData);
-          } else {
-            errorBody = await res.text();
-          }
-          throw new Error(errorBody ? `${res.status}: ${errorBody.slice(0, 500)}` : `Failed to fetch from provider (${res.status})`);
-        }
-
-        if (!isJson) {
-          throw new Error('Endpoint returned success but response was not JSON. Please check your Base URL.');
-        }
-
-        const data = await res.json();
-        console.log('OpenAI-compatible Raw Response:', data);
-        
-        if (isImageModel) {
-          const item = (data.data && data.data[0]) ? data.data[0] : data;
-          let b64 = item.b64_json;
-          let url = item.url || item.video_url || item.image_url;
-          
-          if (b64 || url) {
-            let mimeType = 'image/png';
-            let fileExt = 'png';
-            
-            if (!b64 && url) {
-              const imgRes = await fetch(url);
-              const blob = await imgRes.blob();
-              mimeType = blob.type || 'image/png';
-              if (mimeType.startsWith('video/')) fileExt = 'mp4';
-              else if (mimeType.includes('jpeg')) fileExt = 'jpg';
-              else if (mimeType.includes('webp')) fileExt = 'webp';
-              
-              const blobToBase64 = (b: Blob): Promise<string> => new Promise((resolve, reject) => {
-                const reader = new FileReader();
-                reader.onloadend = () => resolve((reader.result as string).split(',')[1]);
-                reader.onerror = reject;
-                reader.readAsDataURL(b);
-              });
-              b64 = await blobToBase64(blob);
-            }
-            if (b64) {
-              generatedAttachments.push({
-                 name: `generated_${Date.now()}.${fileExt}`,
-                 type: mimeType,
-                 data: b64,
-                 isText: false
-              });
-              fullText = ""; // Clear text as per requirement
-            } else {
-              throw new Error("Failed to extract media from response (no b64_json found after fetch).");
-            }
-          } else {
-            throw new Error("Model response did not contain image data (URL or B64). Raw: " + JSON.stringify(data).slice(0, 200));
-          }
-        } else if (isLegacyModel) {
-          fullText = data.choices?.[0]?.text || '';
-          finalTokens = data.usage?.completion_tokens || 0;
-        } else {
-          fullText = data.choices?.[0]?.message?.content || '';
-          finalTokens = data.usage?.completion_tokens || data.usage?.total_tokens || 0;
-        }
-
-        if (fullText.includes('<options>')) {
-          const match = fullText.match(/<options>(.*?)<\/options>/s);
-          if (match && match[1]) {
-            try {
-              const parsed = JSON.parse(match[1]);
-              setPendingOptions(parsed);
-              fullText = fullText.replace(/<options>.*?<\/options>/s, '').trim();
-            } catch(e) {}
-          }
-        }
-
-        setSessions(prev => prev.map(s => {
-          if (s.id === sessionId) {
-            return {
-              ...s,
-              messages: s.messages.map(m => m.id === assistantMessageId ? { 
-                ...m, 
-                content: fullText,
-                isStreaming: false,
-                attachments: generatedAttachments.length > 0 ? generatedAttachments : undefined
-              } : m),
-              updatedAt: Date.now()
-            };
-          }
-          return s;
-        }));
+      try {
+        const jobs = JSON.parse(localStorage.getItem('iluv_jobs') || '[]');
+        jobs.push(job);
+        localStorage.setItem('iluv_jobs', JSON.stringify(jobs));
+      } catch(err) {
+        throw new Error("Failed to queue background task (localStorage full?). Please clear data.");
       }
-      
-      const responseTime = (Date.now() - startTime) / 1000;
-
-      setSessions(prev => prev.map(s => {
-        if (s.id === sessionId) {
-          return {
-            ...s,
-            messages: s.messages.map(m => m.id === assistantMessageId ? { 
-              ...m, 
-              isStreaming: false, 
-              tokenCount: finalTokens || undefined, 
-              modelUsed: model,
-              responseTime 
-            } : m),
-            updatedAt: Date.now()
-          };
-        }
-        return s;
-      }));
 
     } catch (err: any) {
       setError(err.message || 'An unexpected error occurred.');
-    } finally {
       if (sessionId) {
         setLoadingSessions(prev => {
           const next = new Set(prev);
@@ -1419,18 +1468,18 @@ export default function App() {
               initial={{ width: 0, opacity: 0 }}
               animate={{ width: 300, opacity: 1 }}
               exit={{ width: 0, opacity: 0 }}
-              className="flex-shrink-0 flex flex-col border-r border-[var(--border-app)] bg-[var(--card-app)] z-50 fixed lg:relative h-full shadow-2xl lg:shadow-none"
+              className="flex-shrink-0 flex flex-col border-r border-[var(--border-app)] bg-[var(--card-app)] z-50 fixed lg:relative h-full shadow-lg lg:shadow-none"
             >
             <div className="p-4 flex items-center justify-between border-b border-[var(--border-app)]">
               <div className="flex items-center gap-2 font-bold tracking-tighter text-xl">
-                <div className="w-9 h-9 rounded-none bg-[var(--accent-app)] flex items-center justify-center text-[var(--text-app)] shadow-xl">
+                <div className="w-9 h-9 rounded-sm bg-[var(--accent-app)] flex items-center justify-center text-[var(--bg-app)] shadow-sm">
                   <Sparkles size={22} />
                 </div>
                 <span className="tracking-[0.2em]">iluv</span>
               </div>
               <button 
                 onClick={() => setSidebarOpen(false)}
-                className="p-1.5 hover:bg-slate-200 dark:hover:bg-slate-800 rounded-none transition-colors text-[var(--text-app)]"
+                className="p-1.5 hover:bg-[var(--border-app)] rounded-none transition-colors text-[var(--text-app)]"
               >
                 <ChevronLeft size={18} />
               </button>
@@ -1439,7 +1488,7 @@ export default function App() {
             <div className="p-4">
               <button 
                 onClick={createNewSession}
-                className="w-full flex items-center justify-center gap-2 py-3 px-4 bg-[var(--accent-app)] text-white rounded-none font-medium shadow-lg shadow-orange-500/20 active:scale-[0.98] transition-all"
+                className="w-full flex items-center justify-center gap-2 py-3 px-4 bg-[var(--text-app)] text-[var(--bg-app)] rounded-md font-medium shadow-sm active:scale-[0.98] transition-all"
               >
                 <Plus size={20} />
                 <span>New Conversation</span>
@@ -1453,8 +1502,8 @@ export default function App() {
                   onClick={() => { setActiveSessionId(s.id); setError(null); }}
                   className={`group relative flex items-center gap-3 p-3 rounded-none cursor-pointer transition-all ${
                     activeSessionId === s.id 
-                      ? 'bg-[var(--card-app)] dark:bg-slate-800 shadow-sm border border-[var(--border-app)]' 
-                      : 'hover:bg-slate-200/50 dark:hover:bg-slate-800/50'
+                      ? 'bg-[var(--card-app)] shadow-sm border border-[var(--border-app)]' 
+                      : 'hover:bg-[var(--border-app)]'
                   }`}
                 >
                   <MessageSquare size={18} className={activeSessionId === s.id ? 'text-[var(--accent-app)]' : 'text-[var(--text-app)] opacity-60'} />
@@ -1478,7 +1527,7 @@ export default function App() {
             <div className="p-4 border-t border-[var(--border-app)] flex flex-col gap-2 relative">
               <button 
                 onClick={() => setShowManageSessions(true)}
-                className="flex items-center justify-center gap-2 p-2.5 rounded-none bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 transition-colors text-[11px] font-black uppercase tracking-widest text-[var(--text-app)] w-full shadow-sm"
+                className="flex items-center justify-center gap-2 p-2.5 rounded-md bg-[var(--border-app)] hover:bg-[var(--border-app)]/80 transition-colors text-[11px] font-semibold uppercase tracking-wider text-[var(--text-app)] w-full shadow-sm"
               >
                 <Command size={16} />
                 <span>Manage Sessions</span>
@@ -1501,7 +1550,7 @@ export default function App() {
                           }
                         });
                       }}
-                      className="flex items-center justify-center gap-2 p-2.5 rounded-none bg-[var(--accent-app)] text-white hover:bg-[var(--accent-app)]/90 transition-colors text-[11px] font-black uppercase tracking-widest w-full shadow-lg"
+                      className="flex items-center justify-center gap-2 p-2.5 rounded-md bg-[var(--text-app)] text-[var(--bg-app)] hover:opacity-90 transition-colors text-[11px] font-semibold uppercase tracking-wider w-full shadow-sm"
                     >
                       <Download size={16} />
                       <span>Install App</span>
@@ -1511,7 +1560,7 @@ export default function App() {
               </AnimatePresence>
               <button 
                 onClick={() => setShowSettings(true)}
-                className="flex items-center justify-center gap-2 p-2.5 rounded-none hover:bg-slate-200 dark:hover:bg-slate-800 transition-colors text-[11px] font-black uppercase tracking-widest text-[var(--text-app)] w-full"
+                className="flex items-center justify-center gap-2 p-2.5 rounded-none hover:bg-[var(--border-app)] transition-colors text-[11px] font-black uppercase tracking-widest text-[var(--text-app)] w-full"
               >
                 <Settings size={16} />
                 <span>Preferences</span>
@@ -1530,13 +1579,13 @@ export default function App() {
               initial={{ opacity: 0, scale: 0.9, y: 20 }}
               animate={{ opacity: 1, scale: 1, y: 0 }}
               exit={{ opacity: 0, scale: 0.9, y: 20 }}
-              className="bg-[var(--card-app)] border border-[var(--accent-app)]/40 rounded-[32px] p-8 sm:p-10 shadow-[0_0_50px_rgba(0,112,243,0.2)] max-w-lg w-full relative overflow-hidden"
+              className="bg-[var(--card-app)] border border-[var(--border-app)] rounded-2xl p-8 sm:p-10 shadow-xl max-w-lg w-full relative overflow-hidden"
             >
               <div className="absolute top-0 left-0 w-full h-1 bg-gradient-to-r from-transparent via-[var(--accent-app)] to-transparent opacity-50" />
               
               <div className="flex items-center gap-3 mb-6">
                 <div className="w-2 h-2 rounded-full bg-[var(--accent-app)] animate-ping" />
-                <h3 className="text-[10px] font-black text-[var(--accent-app)] uppercase tracking-[0.4em]">System Clarification Required</h3>
+                <h3 className="text-[10px] font-bold text-[var(--accent-app)] uppercase tracking-widest">System Clarification Required</h3>
               </div>
 
               <p className="text-xl sm:text-2xl font-bold text-[var(--text-app)] mb-8 tracking-tight leading-tight">
@@ -1556,7 +1605,7 @@ export default function App() {
                         handleSendMessage(opt);
                       }
                     }}
-                    className="group flex items-center justify-between px-6 py-4 bg-[var(--border-app)] hover:bg-[var(--accent-app)] text-white rounded-[20px] transition-all border border-[var(--border-app)] hover:border-[var(--accent-app)] text-left"
+                    className="group flex items-center justify-between px-6 py-4 bg-[var(--card-app)] hover:bg-[var(--accent-app)] text-[var(--text-app)] hover:text-[var(--bg-app)] rounded-[20px] transition-all border border-[var(--border-app)] hover:border-[var(--accent-app)] text-left"
                   >
                     <span className="font-bold text-sm tracking-wide">{opt}</span>
                     <ChevronRight size={18} className="opacity-0 group-hover:opacity-100 transition-all -translate-x-2 group-hover:translate-x-0" />
@@ -1566,7 +1615,7 @@ export default function App() {
 
               <button
                 onClick={() => setPendingOptions(null)}
-                className="mt-8 w-full py-3 text-[var(--text-secondary)] text-[10px] font-black uppercase tracking-[0.2em] hover:text-[var(--text-app)] transition-all"
+                className="mt-8 w-full py-3 text-[var(--text-secondary)] text-[10px] font-semibold uppercase tracking-wider hover:text-[var(--text-app)] transition-all"
               >
                 Dismiss Sequence
               </button>
@@ -1588,7 +1637,7 @@ export default function App() {
         )}
 
         {/* Header */}
-        <header className="h-16 flex items-center justify-between px-6 border-b border-[var(--border-app)] bg-[#000000]/80 backdrop-blur-md sticky top-0 z-10 transition-all">
+        <header className="h-16 flex items-center justify-between px-6 border-b border-[var(--border-app)] bg-[var(--bg-app)]/80 backdrop-blur-md sticky top-0 z-10 transition-all">
           <div className="flex items-center gap-3">
              <button 
                 onClick={() => setSidebarOpen(true)}
@@ -1596,7 +1645,7 @@ export default function App() {
              >
                <Layout size={20} />
              </button>
-             <h1 className="text-lg font-black tracking-[0.2em] truncate scroll-hide max-w-[200px] sm:max-w-md uppercase text-[var(--text-app)]">
+             <h1 className="text-lg font-semibold tracking-wider truncate scroll-hide max-w-[200px] sm:max-w-md text-[var(--text-app)]">
                {getActiveSession()?.title || 'iluv'}
              </h1>
           </div>
@@ -1607,7 +1656,7 @@ export default function App() {
                 onClick={() => toggleStudyMode(activeSessionId)}
                 className={`flex items-center gap-2 px-3 py-1.5 rounded-full transition-all border ${
                   getActiveSession()?.studyMode 
-                    ? 'bg-[var(--accent-app)]/10 border-[var(--accent-app)] text-[var(--accent-app)] shadow-[0_0_15px_rgba(59,130,246,0.2)]' 
+                    ? 'bg-[var(--accent-app)]/10 border-[var(--accent-app)] text-[var(--accent-app)] shadow-sm'
                     : 'bg-transparent border-[var(--border-app)] text-[var(--text-secondary)] hover:text-[var(--text-app)] hover:border-[var(--text-secondary)]'
                 }`}
                 title={getActiveSession()?.studyMode ? "Disable Study Mode" : "Enable Study Mode"}
@@ -1621,7 +1670,7 @@ export default function App() {
                     />
                   )}
                 </div>
-                <span className="text-[10px] font-black uppercase tracking-widest hidden sm:inline">
+                <span className="text-[10px] font-semibold uppercase tracking-wider hidden sm:inline">
                   {getActiveSession()?.studyMode ? "Study Mode ON" : "Study Mode"}
                 </span>
               </button>
@@ -1632,18 +1681,18 @@ export default function App() {
         {/* Chat Area */}
         <div 
           ref={scrollRef}
-          className="flex-1 overflow-y-auto p-4 sm:p-8 space-y-8 scroll-smooth custom-scrollbar bg-[#000000]"
+          className="flex-1 overflow-y-auto p-4 sm:p-8 space-y-8 scroll-smooth custom-scrollbar bg-[var(--bg-app)]"
         >
           {sessions.length === 0 || (activeSessionId && getActiveSession()?.messages.length === 0) ? (
             <div className="h-full flex flex-col items-center justify-center text-center max-w-lg mx-auto">
               <motion.div 
                 initial={{ scale: 0.8, opacity: 0 }}
                 animate={{ scale: 1, opacity: 1 }}
-                className="w-20 h-20 rounded-full bg-[var(--card-app)] border border-[var(--accent-app)]/20 flex items-center justify-center text-[var(--accent-app)] mb-8 shadow-2xl shadow-[var(--accent-app)]/10"
+                className="w-20 h-20 rounded-full bg-[var(--card-app)] border border-[var(--border-app)] flex items-center justify-center text-[var(--accent-app)] mb-8 shadow-sm"
               >
                 <Sparkles size={40} />
               </motion.div>
-              <h2 className="text-4xl font-black mb-4 tracking-tighter uppercase italic text-[var(--text-app)] leading-none">iluv</h2>
+              <h2 className="text-4xl font-light mb-4 tracking-tight text-[var(--text-app)] leading-none">iluv</h2>
               <p className="text-[var(--text-secondary)] mb-10 font-medium tracking-wide">
                 Secure. Minimal. Direct. Your private intelligence architecture.
               </p>
@@ -1675,16 +1724,12 @@ export default function App() {
               >
                 <div className={`max-w-[90%] sm:max-w-[80%] group relative ${
                   m.role === 'user' 
-                    ? 'bg-[var(--accent-app)] text-white rounded-3xl rounded-tr-none px-6 py-5 shadow-2xl shadow-[var(--accent-app)]/20' 
-                    : 'bg-[var(--card-app)] border border-[var(--border-app)] rounded-3xl rounded-tl-none px-7 py-6 shadow-xl'
+                    ? 'bg-[var(--border-app)] text-[var(--text-app)] rounded-2xl rounded-tr-md px-6 py-5 shadow-sm' 
+                    : 'bg-[var(--card-app)] border border-[var(--border-app)] rounded-2xl rounded-tl-md px-7 py-6 shadow-sm'
                 }`}>
                   <button 
                     onClick={() => copyToClipboard(m.content, m.id)}
-                    className={`absolute top-4 ${m.role === 'user' ? 'left-4' : 'right-4'} p-2 rounded-lg opacity-0 group-hover:opacity-100 transition-all ${
-                      m.role === 'user' 
-                        ? 'text-white/70 hover:text-white hover:bg-black/20' 
-                        : 'text-[var(--text-secondary)] hover:text-[var(--accent-app)] hover:bg-[var(--border-app)]'
-                    }`}
+                    className={`absolute top-4 ${m.role === 'user' ? 'left-4' : 'right-4'} p-2 rounded-lg opacity-0 group-hover:opacity-100 transition-all text-[var(--text-secondary)] hover:text-[var(--accent-app)] hover:bg-black/5`}
                     title="Copy text"
                   >
                     {copiedId === m.id ? <Check size={14} className="text-green-500" /> : <Copy size={14} />}
@@ -1709,14 +1754,14 @@ export default function App() {
                                               : Bar;
                               
                               return (
-                                <div className="my-6 p-4 bg-[#050505] border border-[var(--border-app)] rounded-xl shadow-lg h-[350px]">
+                                <div className="my-6 p-4 bg-[var(--card-app)] border border-[var(--border-app)] rounded-xl shadow-sm h-[350px]">
                                   <div className="mb-2 text-center text-xs font-bold text-[var(--accent-app)] uppercase tracking-widest">{config.title || "Visualised Report"}</div>
                                   <ResponsiveContainer width="100%" height="100%">
                                     <ChartType data={config.data}>
                                       <CartesianGrid strokeDasharray="3 3" stroke="#222" />
                                       <XAxis dataKey={config.xAxisKey} stroke="#888" fontSize={12} tickLine={false} axisLine={false} />
                                       <YAxis stroke="#888" fontSize={12} tickLine={false} axisLine={false} />
-                                      <RechartsTooltip contentStyle={{ backgroundColor: '#111', borderColor: '#333', color: '#fff', borderRadius: '8px' }} />
+                                      <RechartsTooltip contentStyle={{ backgroundColor: 'var(--card-app)', borderColor: 'var(--border-app)', color: 'var(--text-app)', borderRadius: '8px' }} />
                                       <Legend wrapperStyle={{ fontSize: '12px', paddingTop: '10px' }} />
                                       {config.series.map((s: any, i: number) => (
                                         <DataComponent 
@@ -1749,7 +1794,7 @@ export default function App() {
                       {m.attachments.map((att, idx) => (
                         <div key={idx} className="relative group/att">
                           {att.type.startsWith('image/') ? (
-                            <div className="relative rounded-xl overflow-hidden border border-[var(--border-app)] shadow-lg bg-black/20">
+                            <div className="relative rounded-xl overflow-hidden border border-[var(--border-app)] shadow-sm bg-[var(--card-app)]">
                               <img 
                                 src={`data:${att.type};base64,${att.data}`} 
                                 alt={att.name}
@@ -1758,14 +1803,14 @@ export default function App() {
                               />
                               <button 
                                 onClick={() => handleDownload(att.isText ? att.content! : att.data!, att.name, att.type, att.isText)}
-                                className="absolute bottom-2 right-2 p-2 bg-black/60 hover:bg-[var(--accent-app)] text-white rounded-lg backdrop-blur-md opacity-0 group-hover/att:opacity-100 transition-all shadow-xl"
+                                className="absolute bottom-2 right-2 p-2 bg-black/40 hover:bg-black/60 text-white rounded-md backdrop-blur-md opacity-0 group-hover/att:opacity-100 transition-all shadow-sm"
                                 title="Download Image"
                               >
                                 <Download size={16} />
                               </button>
                             </div>
                           ) : (
-                            <div className="flex items-center gap-3 p-3 bg-black/20 border border-[var(--border-app)] rounded-xl hover:border-[var(--accent-app)]/50 transition-all">
+                            <div className="flex items-center gap-3 p-3 bg-[var(--card-app)] border border-[var(--border-app)] rounded-xl hover:border-[var(--accent-app)]/50 transition-all">
                               <FileText size={18} className="text-[var(--accent-app)]" />
                               <div className="flex flex-col">
                                 <span className="text-[10px] font-bold text-[var(--text-app)] truncate max-w-[120px]">{att.name}</span>
@@ -1791,10 +1836,10 @@ export default function App() {
                   )}
 
                   {m.role === 'assistant' && m.thoughtProcess && (
-                    <div className="mt-4 pt-4 border-t border-white/10">
+                    <div className="mt-4 pt-4 border-t border-[var(--border-app)]">
                       <button 
                         onClick={() => setOpenThoughts(prev => ({ ...prev, [m.id]: !prev[m.id] }))}
-                        className="flex items-center gap-2 text-[10px] font-black uppercase tracking-[0.2em] text-white/50 hover:text-white transition-colors"
+                        className="flex items-center gap-2 text-[10px] font-semibold uppercase tracking-wider text-[var(--text-secondary)] hover:text-[var(--accent-app)] transition-colors"
                       >
                         <ChevronDown size={12} className={`transition-transform ${openThoughts[m.id] ? 'rotate-180' : ''}`} />
                         System Logic Analysis
@@ -1807,7 +1852,7 @@ export default function App() {
                             exit={{ height: 0, opacity: 0 }}
                             className="overflow-hidden"
                           >
-                            <div className="mt-3 p-4 bg-[#050505] rounded-xl border border-[var(--border-app)] shadow-inner">
+                            <div className="mt-3 p-4 bg-[var(--bg-app)] rounded-md border border-[var(--border-app)]">
                               <div className="grid grid-cols-2 gap-4 mb-4">
                                 {Object.entries(JSON.parse(m.thoughtProcess)).map(([key, val]) => (
                                   key !== 'inferredAction' && (
@@ -1869,7 +1914,7 @@ export default function App() {
                animate={{ opacity: 1, scale: 1 }}
                className="flex justify-start"
             >
-              <div className="bg-[var(--card-app)] border border-[var(--border-app)] rounded-sm rounded-tl-none px-8 py-5 flex gap-4 items-center shadow-2xl relative overflow-hidden group">
+              <div className="bg-[var(--card-app)] border border-[var(--border-app)] rounded-xl rounded-tl-md px-8 py-5 flex gap-4 items-center shadow-sm relative overflow-hidden group">
                 <motion.div 
                   animate={{ 
                     rotate: [0, 90, 180, 270, 360],
@@ -1899,7 +1944,7 @@ export default function App() {
         </div>
 
         {/* Interraction Area (Input & Controls) */}
-        <div className="relative border-t border-[var(--border-app)] bg-[#000000] p-2 sm:p-10 transition-all">
+        <div className="relative border-t border-[var(--border-app)] bg-[var(--bg-app)] p-2 sm:p-10 transition-all">
           <div className="max-w-5xl mx-auto space-y-4 sm:space-y-6">
             
             <AnimatePresence />
@@ -1913,7 +1958,7 @@ export default function App() {
                     animate={{ opacity: 1, scale: 1, y: 0 }}
                     className="relative group h-24 w-24"
                   >
-                    <div className="h-full w-full rounded-2xl overflow-hidden border-2 border-[var(--border-app)] bg-black/40 shadow-xl group-hover:border-[var(--accent-app)]/50 transition-all">
+                    <div className="h-full w-full rounded-2xl overflow-hidden border-2 border-[var(--border-app)] bg-[var(--card-app)] shadow-xl group-hover:border-[var(--accent-app)]/50 transition-all">
                       {att.type.startsWith('image/') ? (
                         <img src={`data:${att.type};base64,${att.data}`} className="w-full h-full object-cover" />
                       ) : (
@@ -1941,7 +1986,7 @@ export default function App() {
                     initial={{ opacity: 0, y: 10, scale: 0.98 }}
                     animate={{ opacity: 1, y: 0, scale: 1 }}
                     exit={{ opacity: 0, y: 10, scale: 0.98 }}
-                    className="absolute bottom-full left-0 mb-4 w-[calc(100vw-2rem)] sm:w-80 max-w-sm bg-[var(--card-app)] border border-[var(--border-app)] shadow-2xl p-6 sm:p-7 z-50 rounded-3xl backdrop-blur-2xl"
+                    className="absolute bottom-full left-0 mb-4 w-[calc(100vw-2rem)] sm:w-80 max-w-sm bg-[var(--card-app)] border border-[var(--border-app)] shadow-xl p-6 sm:p-7 z-50 rounded-2xl backdrop-blur-2xl"
                   >
                     <div className="flex justify-between items-center mb-6">
                       <span className="text-[10px] font-black uppercase tracking-[0.4em] text-[var(--accent-app)]">Strategy Settings</span>
@@ -1995,7 +2040,7 @@ export default function App() {
                                }}
                                className={`px-3 py-1.5 rounded-lg text-[9px] font-black uppercase tracking-widest transition-all ${
                                  (settings.activeProviderId === p.id || (!settings.activeProviderId && settings.providers[0]?.id === p.id))
-                                   ? 'bg-[var(--accent-app)] text-white shadow-lg shadow-[var(--accent-app)]/20'
+                                   ? 'bg-[var(--accent-app)] text-[var(--bg-app)] shadow-lg shadow-[var(--accent-app)]/20'
                                    : 'bg-[var(--border-app)] text-[var(--text-secondary)] hover:text-[var(--text-app)] border border-[var(--border-app)]'
                                }`}
                              >
@@ -2026,7 +2071,7 @@ export default function App() {
                 )}
               </AnimatePresence>
 
-              <div className="flex items-end gap-2 sm:gap-3 bg-[var(--card-app)] border border-[var(--border-app)] focus-within:border-[var(--accent-app)] rounded-[24px] sm:rounded-3xl p-2 pl-4 sm:p-5 sm:pl-7 transition-all shadow-2xl ring-1 ring-[var(--accent-app)]/10">
+              <div className="flex items-end gap-2 sm:gap-3 bg-[var(--card-app)] border border-[var(--border-app)] focus-within:border-[var(--accent-app)] rounded-2xl p-2 pl-4 sm:p-3 sm:pl-5 transition-all shadow-md">
                 <div className="flex gap-1 mb-1 sm:mb-1">
                   <button 
                     onClick={() => setShowParamMenu(!showParamMenu)}
@@ -2068,9 +2113,9 @@ export default function App() {
                 <button 
                   onClick={() => handleSendMessage()}
                   disabled={!input.trim() || isSessionLoading(activeSessionId)}
-                  className={`p-3 sm:p-4 mb-0.5 sm:mb-1 rounded-xl sm:rounded-2xl transition-all shadow-2xl ${
+                  className={`p-3 sm:p-4 rounded-xl transition-all shadow-sm ${
                     input.trim() 
-                      ? 'bg-[var(--accent-app)] text-white hover:scale-105 active:scale-95 shadow-[var(--accent-app)]/50' 
+                      ? 'bg-[var(--text-app)] text-[var(--bg-app)] hover:opacity-90 active:scale-95' 
                       : 'bg-[var(--border-app)] text-[var(--text-secondary)] opacity-50'
                   }`}
                 >
@@ -2079,7 +2124,7 @@ export default function App() {
               </div>
             </div>
           </div>
-          <div className="text-center mt-6 text-[9px] text-[var(--text-secondary)] uppercase tracking-[0.7em] font-black opacity-40">
+          <div className="text-center mt-6 text-[10px] text-[var(--text-secondary)] tracking-widest font-medium opacity-60">
             iluv <span className="text-[#3b82f6]">|</span> ARCHITECT OF SECURE INTELLIGENCE
           </div>
         </div>
@@ -2100,13 +2145,13 @@ export default function App() {
               initial={{ opacity: 0, scale: 0.95, y: 20 }}
               animate={{ opacity: 1, scale: 1, y: 0 }}
               exit={{ opacity: 0, scale: 0.95, y: 20 }}
-              className="relative w-full max-w-md bg-[var(--card-app)] dark:bg-slate-900 rounded-none shadow-2xl p-6 overflow-hidden border border-[var(--border-app)]"
+              className="relative w-full max-w-md bg-[var(--card-app)] rounded-xl shadow-xl p-6 overflow-hidden border border-[var(--border-app)]"
             >
               <div className="flex items-center justify-between mb-6">
                 <h3 className="text-xl font-bold uppercase tracking-widest text-[var(--accent-app)]">System Parameters</h3>
                 <button 
                   onClick={() => setShowSettings(false)}
-                  className="p-2 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-none transition-colors"
+                  className="p-2 hover:bg-[var(--border-app)] rounded-none transition-colors"
                 >
                   <X size={20} />
                 </button>
@@ -2115,12 +2160,12 @@ export default function App() {
               <div className="space-y-6 max-h-[60vh] overflow-y-auto pr-2 custom-scrollbar">
                 <div className="space-y-4">
                   <div className="flex items-center justify-between">
-                    <span className="text-[10px] font-black uppercase tracking-[0.4em] text-[var(--accent-app)]">Active Intelligence Provider</span>
+                    <span className="text-[10px] font-semibold uppercase tracking-wider text-[var(--accent-app)]">Active Intelligence Provider</span>
                   </div>
                   <select
                     value={settings.activeProviderId || settings.providers[0]?.id}
                     onChange={(e) => setSettings(s => ({ ...s, activeProviderId: e.target.value }))}
-                    className="w-full bg-slate-50 dark:bg-slate-800 border border-[var(--border-app)] rounded-none py-3 px-4 focus:outline-none focus:ring-1 focus:ring-[var(--accent-app)] transition-all font-mono text-sm text-[var(--accent-app)]"
+                    className="w-full bg-[var(--card-app)] border border-[var(--border-app)] rounded-none py-3 px-4 focus:outline-none focus:ring-1 focus:ring-[var(--accent-app)] transition-all font-mono text-sm text-[var(--accent-app)]"
                   >
                     {settings.providers.map(p => (
                       <option key={p.id} value={p.id}>{p.name} {p.enabled ? '' : '(Disabled)'}</option>
@@ -2130,11 +2175,11 @@ export default function App() {
 
                 <div className="space-y-6 pt-4 border-t border-[var(--border-app)]">
                   <div className="flex items-center justify-between">
-                    <span className="text-[10px] font-black uppercase tracking-[0.4em] text-[var(--text-secondary)]">Manage Providers</span>
+                    <span className="text-[10px] font-semibold uppercase tracking-wider text-[var(--text-secondary)]">Manage Providers</span>
                   </div>
 
                   {settings.providers.map((provider, idx) => (
-                    <div key={provider.id} className="p-4 bg-slate-50 dark:bg-slate-800/50 border border-[var(--border-app)] space-y-4 relative group/item">
+                    <div key={provider.id} className="p-4 bg-[var(--card-app)] border border-[var(--border-app)] space-y-4 relative group/item">
                       <div className="flex items-center justify-between mb-2">
                         <input 
                           value={provider.name}
@@ -2146,7 +2191,7 @@ export default function App() {
                       </div>
                       
                       <div className="space-y-2">
-                        <label className="block text-[9px] font-black uppercase tracking-widest text-[var(--text-secondary)]">Authentication Key</label>
+                        <label className="block text-xs font-medium text-[var(--text-secondary)] mb-1">Authentication Key</label>
                         <input 
                           type="password"
                           value={provider.apiKey}
@@ -2156,12 +2201,12 @@ export default function App() {
                             setSettings(s => ({ ...s, providers: newProviders }));
                           }}
                           placeholder="API Key"
-                          className="w-full bg-[var(--card-app)] dark:bg-slate-900 border border-[var(--border-app)] rounded-none py-2 px-3 focus:outline-none focus:ring-1 focus:ring-[var(--accent-app)] transition-all font-mono text-xs"
+                          className="w-full bg-[var(--bg-app)] border border-[var(--border-app)] rounded-none py-2 px-3 focus:outline-none focus:ring-1 focus:ring-[var(--accent-app)] transition-all font-mono text-xs"
                         />
                       </div>
 
                       <div className="space-y-2">
-                        <label className="block text-[9px] font-black uppercase tracking-widest text-[var(--text-secondary)]">Base Endpoint URL</label>
+                        <label className="block text-xs font-medium text-[var(--text-secondary)] mb-1">Base Endpoint URL</label>
                         <input 
                           value={provider.baseUrl}
                           onChange={(e) => {
@@ -2170,7 +2215,7 @@ export default function App() {
                             setSettings(s => ({ ...s, providers: newProviders }));
                           }}
                           placeholder="https://api.openai.com"
-                          className="w-full bg-[var(--card-app)] dark:bg-slate-900 border border-[var(--border-app)] rounded-none py-2 px-3 focus:outline-none focus:ring-1 focus:ring-[var(--accent-app)] transition-all font-mono text-[10px]"
+                          className="w-full bg-[var(--bg-app)] border border-[var(--border-app)] rounded-none py-2 px-3 focus:outline-none focus:ring-1 focus:ring-[var(--accent-app)] transition-all font-mono text-[10px]"
                         />
                       </div>
                     </div>
@@ -2179,7 +2224,7 @@ export default function App() {
 
                 <div className="space-y-6 pt-4 border-t border-[var(--border-app)]">
                   <div className="flex items-center justify-between">
-                     <span className="text-[10px] font-black uppercase tracking-[0.4em] text-[var(--text-secondary)]">Model Designation</span>
+                     <span className="text-[10px] font-semibold uppercase tracking-wider text-[var(--text-secondary)]">Model Designation</span>
                      <button 
                        onClick={() => {
                          const provider = getActiveProvider();
@@ -2195,7 +2240,7 @@ export default function App() {
                   <select
                     value={settings.model}
                     onChange={(e) => setSettings(s => ({ ...s, model: e.target.value }))}
-                    className="w-full bg-slate-50 dark:bg-slate-800 border border-[var(--border-app)] rounded-none py-3 px-4 focus:outline-none focus:ring-1 focus:ring-[var(--accent-app)] transition-all font-mono text-sm text-[var(--accent-app)]"
+                    className="w-full bg-[var(--card-app)] border border-[var(--border-app)] rounded-none py-3 px-4 focus:outline-none focus:ring-1 focus:ring-[var(--accent-app)] transition-all font-mono text-sm text-[var(--accent-app)]"
                   >
                     {settings.model && !displayModels.map(m => m.id).includes(settings.model) && (
                       <option value={settings.model}>{settings.model}</option>
@@ -2211,67 +2256,32 @@ export default function App() {
                 </div>
 
                 <div className="space-y-6 pt-4 border-t border-[var(--border-app)]">
-                  <div className="flex items-center justify-between">
-                     <span className="text-[10px] font-black uppercase tracking-[0.4em] text-[var(--text-secondary)]">Theme Customization</span>
+                  <div className="flex items-center justify-between mb-4">
+                     <span className="text-[10px] font-semibold uppercase tracking-wider text-[var(--text-secondary)]">Appearance</span>
                   </div>
 
-                  <select
-                    value={settings.themePreset || 'dark'}
-                    onChange={(e) => {
-                      const newSettings = { ...settings, themePreset: e.target.value as any };
-                      if (e.target.value !== 'custom') {
-                        delete newSettings.customColors;
-                      } else {
-                        newSettings.customColors = {
-                          bgApp: '#000000',
-                          textApp: '#ffffff',
-                          accentApp: 'var(--accent-app)',
-                          borderApp: 'var(--border-app)',
-                          cardApp: 'var(--card-app)',
-                        };
-                      }
-                      setSettings(newSettings);
-                    }}
-                    className="w-full mb-4 bg-slate-50 dark:bg-slate-800 border border-[var(--border-app)] rounded-none py-3 px-4 focus:outline-none focus:ring-1 focus:ring-[var(--accent-app)] transition-all font-mono text-sm text-[var(--accent-app)]"
-                  >
-                     <option value="dark">Dark (Default)</option>
-                     <option value="light">Light</option>
-                     <option value="midnight">Midnight</option>
-                     <option value="hacker">Hacker</option>
-                     <option value="custom">Custom</option>
-                  </select>
-
-                  {settings.themePreset === 'custom' && settings.customColors && (
-                    <div className="p-4 bg-slate-50 dark:bg-slate-800/50 border border-[var(--border-app)] space-y-4">
-                      <div className="flex items-center justify-between">
-                         <label className="block text-[9px] font-black uppercase tracking-widest text-[var(--text-secondary)]">Background Color</label>
-                         <input 
-                           type="color"
-                           value={settings.customColors.bgApp}
-                           onChange={(e) => setSettings({ ...settings, customColors: { ...settings.customColors!, bgApp: e.target.value } })}
-                           className="bg-transparent border-none cursor-pointer p-0 h-6 w-10 flex-shrink-0"
-                         />
-                      </div>
-                      <div className="flex items-center justify-between">
-                         <label className="block text-[9px] font-black uppercase tracking-widest text-[var(--text-secondary)]">Text Color</label>
-                         <input 
-                           type="color"
-                           value={settings.customColors.textApp}
-                           onChange={(e) => setSettings({ ...settings, customColors: { ...settings.customColors!, textApp: e.target.value } })}
-                           className="bg-transparent border-none cursor-pointer p-0 h-6 w-10 flex-shrink-0"
-                         />
-                      </div>
-                      <div className="flex items-center justify-between">
-                         <label className="block text-[9px] font-black uppercase tracking-widest text-[var(--text-secondary)]">Accent Color</label>
-                         <input 
-                           type="color"
-                           value={settings.customColors.accentApp}
-                           onChange={(e) => setSettings({ ...settings, customColors: { ...settings.customColors!, accentApp: e.target.value } })}
-                           className="bg-transparent border-none cursor-pointer p-0 h-6 w-10 flex-shrink-0"
-                         />
-                      </div>
-                    </div>
-                  )}
+                  <div className="flex rounded-md border border-[var(--border-app)] p-1 bg-[var(--card-app)]">
+                    <button
+                      onClick={() => setSettings(s => ({ ...s, themePreset: 'light' }))}
+                      className={`flex-1 py-2 text-xs font-semibold rounded transition-all ${
+                        settings.themePreset === 'light' || !settings.themePreset 
+                          ? 'bg-[var(--text-app)] text-[var(--bg-app)] shadow-sm' 
+                          : 'text-[var(--text-secondary)] hover:text-[var(--text-app)]'
+                      }`}
+                    >
+                      Light
+                    </button>
+                    <button
+                      onClick={() => setSettings(s => ({ ...s, themePreset: 'dark' }))}
+                      className={`flex-1 py-2 text-xs font-semibold rounded transition-all ${
+                        settings.themePreset === 'dark' 
+                          ? 'bg-[var(--text-app)] text-[var(--bg-app)] shadow-sm' 
+                          : 'text-[var(--text-secondary)] hover:text-[var(--text-app)]'
+                      }`}
+                    >
+                      Dark
+                    </button>
+                  </div>
                 </div>
 
               </div>
@@ -2304,17 +2314,17 @@ export default function App() {
               initial={{ scale: 0.95, opacity: 0, y: 20 }}
               animate={{ scale: 1, opacity: 1, y: 0 }}
               exit={{ scale: 0.95, opacity: 0, y: 20 }}
-              className="bg-[var(--bg-app)] border border-[var(--border-app)] rounded-none p-6 sm:p-8 max-w-3xl w-full relative z-10 shadow-2xl max-h-[80vh] flex flex-col"
+              className="bg-[var(--bg-app)] border border-[var(--border-app)] rounded-2xl p-6 sm:p-8 max-w-3xl w-full relative z-10 shadow-2xl max-h-[80vh] flex flex-col"
             >
               <div className="flex justify-between items-center mb-8 border-b border-[var(--border-app)] pb-4">
                 <div className="flex flex-col gap-1">
-                  <h2 className="text-xl font-black uppercase tracking-widest text-[var(--text-app)] flex items-center gap-3">
+                  <h2 className="text-xl font-semibold tracking-wide text-[var(--text-app)] flex items-center gap-3">
                     <Command className="text-[var(--accent-app)]" /> Session Management
                   </h2>
                 </div>
                 <button 
                   onClick={() => setShowManageSessions(false)}
-                  className="p-2 hover:bg-slate-200 dark:hover:bg-slate-800 rounded-none transition-colors text-[var(--text-app)]"
+                  className="p-2 hover:bg-[var(--border-app)] rounded-none transition-colors text-[var(--text-app)]"
                 >
                   <X size={20} />
                 </button>
@@ -2322,7 +2332,7 @@ export default function App() {
 
               <div className="flex-1 overflow-y-auto mb-6 custom-scrollbar pr-2 space-y-2">
                 {sessions.map(s => (
-                  <div key={s.id} className="flex items-center gap-3 p-3 bg-slate-100 dark:bg-[var(--border-app)] border border-[var(--border-app)]">
+                  <div key={s.id} className="flex items-center gap-3 p-3 bg-[var(--border-app)] border border-[var(--border-app)]">
                     <input 
                       type="checkbox"
                       checked={selectedSessionIds.has(s.id)}
@@ -2352,35 +2362,53 @@ export default function App() {
                 <button
                   onClick={handleArchiveSessions}
                   disabled={selectedSessionIds.size === 0}
-                  className="flex-1 flex items-center justify-center gap-2 px-4 py-3 bg-[var(--card-app)] hover:bg-slate-200 dark:hover:bg-slate-800 border border-[var(--border-app)] uppercase tracking-widest text-[10px] font-black disabled:opacity-50 transition-all text-[var(--text-app)]"
+                  className="flex-1 flex items-center justify-center gap-2 px-4 py-3 bg-[var(--card-app)] hover:bg-[var(--border-app)] border border-[var(--border-app)] uppercase tracking-widest text-[10px] font-black disabled:opacity-50 transition-all text-[var(--text-app)]"
                 >
                   <Archive size={14} /> Archive
                 </button>
                 <button
                   onClick={handleUnarchiveSessions}
                   disabled={selectedSessionIds.size === 0}
-                  className="flex-1 flex items-center justify-center gap-2 px-4 py-3 bg-[var(--card-app)] hover:bg-slate-200 dark:hover:bg-slate-800 border border-[var(--border-app)] uppercase tracking-widest text-[10px] font-black disabled:opacity-50 transition-all text-[var(--text-app)]"
+                  className="flex-1 flex items-center justify-center gap-2 px-4 py-3 bg-[var(--card-app)] hover:bg-[var(--border-app)] border border-[var(--border-app)] uppercase tracking-widest text-[10px] font-black disabled:opacity-50 transition-all text-[var(--text-app)]"
                 >
                   <Archive size={14} className="rotate-180" /> Unarchive
                 </button>
                 <button
                   onClick={handleMergeSessions}
                   disabled={selectedSessionIds.size < 2}
-                  className="flex-1 flex items-center justify-center gap-2 px-4 py-3 bg-[var(--card-app)] hover:bg-slate-200 dark:hover:bg-slate-800 border border-[var(--border-app)] uppercase tracking-widest text-[10px] font-black disabled:opacity-50 transition-all text-[var(--text-app)]"
+                  className="flex-1 flex items-center justify-center gap-2 px-4 py-3 bg-[var(--card-app)] hover:bg-[var(--border-app)] border border-[var(--border-app)] uppercase tracking-widest text-[10px] font-black disabled:opacity-50 transition-all text-[var(--text-app)]"
                 >
                   <Combine size={14} /> Merge ({selectedSessionIds.size})
                 </button>
                 <button
-                  onClick={handleExportSelectedSessions}
-                  disabled={selectedSessionIds.size === 0}
-                  className="flex-1 flex items-center justify-center gap-2 px-4 py-3 bg-[var(--card-app)] hover:bg-slate-200 dark:hover:bg-slate-800 border border-[var(--border-app)] uppercase tracking-widest text-[10px] font-black disabled:opacity-50 transition-all text-[var(--text-app)]"
+                  onClick={() => handleExportSessions(selectedSessionIds.size === 0)}
+                  className="flex-1 flex items-center justify-center gap-2 px-4 py-3 bg-[var(--card-app)] hover:bg-[var(--border-app)] border border-[var(--border-app)] text-xs font-medium disabled:opacity-50 transition-all text-[var(--text-app)] rounded-md"
                 >
-                  <FolderDown size={14} /> Export JSON
+                  <FolderDown size={14} /> 
+                  {selectedSessionIds.size > 0 ? `Backup Selected` : `Backup All`}
                 </button>
+                <div className="flex flex-col gap-2 mt-2 w-full">
+                  <label className="w-full flex items-center justify-center gap-2 px-4 py-3 bg-[var(--card-app)] hover:bg-[var(--border-app)] border border-[var(--border-app)] text-xs font-medium cursor-pointer transition-all text-[var(--accent-app)] rounded-md">
+                    <FolderUp size={14} /> Restore Backup
+                    <input type="file" className="hidden" accept=".json" onChange={handleRestoreSessions} />
+                  </label>
+                  <label className="flex items-center gap-2 px-2 pb-2 text-[10px] uppercase font-bold text-[var(--text-secondary)] whitespace-nowrap cursor-pointer">
+                    <input type="checkbox" className="accent-[var(--accent-app)]" checked={restoreAsMemory} onChange={e => setRestoreAsMemory(e.target.checked)} />
+                    Use restored chats as Memory
+                  </label>
+                  {settings.chatMemory && (
+                    <button
+                      onClick={() => setSettings(prev => ({ ...prev, chatMemory: undefined }))}
+                      className="text-red-500 text-[10px] font-bold uppercase tracking-widest text-left px-2 pb-2 hover:underline"
+                    >
+                      Clear Memory ({Math.round(settings.chatMemory.length / 1024)}KB)
+                    </button>
+                  )}
+                </div>
                 <button
                   onClick={handleDeleteSelectedSessions}
                   disabled={selectedSessionIds.size === 0}
-                  className="w-full mt-2 flex items-center justify-center gap-2 px-4 py-3 bg-red-500/10 hover:bg-red-500/20 border border-red-500/30 text-red-500 uppercase tracking-widest text-[10px] font-black disabled:opacity-50 transition-all"
+                  className="w-full mt-2 flex items-center justify-center gap-2 px-4 py-3 bg-red-50 text-red-600 hover:bg-red-100 border border-red-200 text-xs font-medium disabled:opacity-50 transition-all rounded-md"
                 >
                   <Trash2 size={14} /> Delete Selected
                 </button>

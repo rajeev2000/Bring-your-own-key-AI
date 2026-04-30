@@ -44,14 +44,8 @@ export interface AppSettings {
   model: string;
   temperature?: number;
   maxOutputTokens?: number;
-  themePreset?: 'dark' | 'light' | 'midnight' | 'hacker' | 'custom';
-  customColors?: {
-    bgApp: string;
-    textApp: string;
-    accentApp: string;
-    borderApp: string;
-    cardApp: string;
-  };
+  themePreset?: 'dark' | 'light';
+  chatMemory?: string;
 }
 
 export const DEFAULT_MODEL = 'gemini-3-flash-preview';
