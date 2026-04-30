@@ -36,7 +36,9 @@ import {
   FolderDown,
   FolderUp,
   GraduationCap,
-  BookOpen
+  BookOpen,
+  Menu,
+  SquarePen
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import ReactMarkdown from 'react-markdown';
@@ -1637,44 +1639,30 @@ export default function App() {
         )}
 
         {/* Header */}
-        <header className="h-16 flex items-center justify-between px-6 border-b border-[var(--border-app)] bg-[var(--bg-app)]/80 backdrop-blur-md sticky top-0 z-10 transition-all">
-          <div className="flex items-center gap-3">
+        <header className="h-16 flex items-center justify-between px-4 sm:px-6 sticky top-0 z-10 transition-all">
+          <div className="flex-1 flex justify-start">
              <button 
                 onClick={() => setSidebarOpen(true)}
-                className={`lg:hidden p-2 hover:bg-[var(--card-app)] rounded-full transition-colors ${sidebarOpen ? 'hidden' : ''} text-[var(--accent-app)]`}
+                className={`p-2 hover:bg-[var(--border-app)] rounded-full transition-colors ${sidebarOpen ? 'hidden' : ''} text-[var(--text-app)]`}
              >
-               <Layout size={20} />
+               <Menu size={20} />
              </button>
-             <h1 className="text-lg font-semibold tracking-wider truncate scroll-hide max-w-[200px] sm:max-w-md text-[var(--text-app)]">
-               {getActiveSession()?.title || 'iluv'}
+          </div>
+          
+          <div className="flex-1 flex justify-center">
+            <h1 className="text-xl font-medium tracking-tight text-[var(--text-app)]">
+               iluv
              </h1>
           </div>
           
-          <div className="flex items-center gap-2">
-            {activeSessionId && (
-              <button 
-                onClick={() => toggleStudyMode(activeSessionId)}
-                className={`flex items-center gap-2 px-3 py-1.5 rounded-full transition-all border ${
-                  getActiveSession()?.studyMode 
-                    ? 'bg-[var(--accent-app)]/10 border-[var(--accent-app)] text-[var(--accent-app)] shadow-sm'
-                    : 'bg-transparent border-[var(--border-app)] text-[var(--text-secondary)] hover:text-[var(--text-app)] hover:border-[var(--text-secondary)]'
-                }`}
-                title={getActiveSession()?.studyMode ? "Disable Study Mode" : "Enable Study Mode"}
-              >
-                <div className="relative">
-                  <GraduationCap size={16} />
-                  {getActiveSession()?.studyMode && (
-                    <motion.div 
-                      layoutId="study-indicator"
-                      className="absolute -top-1 -right-1 w-2 h-2 bg-[var(--accent-app)] rounded-full"
-                    />
-                  )}
-                </div>
-                <span className="text-[10px] font-semibold uppercase tracking-wider hidden sm:inline">
-                  {getActiveSession()?.studyMode ? "Study Mode ON" : "Study Mode"}
-                </span>
-              </button>
-            )}
+          <div className="flex-1 flex justify-end gap-2">
+            <button 
+              onClick={createNewSession}
+              className="p-2 hover:bg-[var(--border-app)] rounded-full transition-colors text-[var(--text-app)]"
+              title="New Chat"
+            >
+              <SquarePen size={20} />
+            </button>
           </div>
         </header>
 
@@ -1684,32 +1672,34 @@ export default function App() {
           className="flex-1 overflow-y-auto p-4 sm:p-8 space-y-8 scroll-smooth custom-scrollbar bg-[var(--bg-app)]"
         >
           {sessions.length === 0 || (activeSessionId && getActiveSession()?.messages.length === 0) ? (
-            <div className="h-full flex flex-col items-center justify-center text-center max-w-lg mx-auto">
+            <div className="h-full flex flex-col justify-center max-w-2xl mx-auto w-full pt-10 sm:pt-20 px-2 sm:px-0">
               <motion.div 
-                initial={{ scale: 0.8, opacity: 0 }}
-                animate={{ scale: 1, opacity: 1 }}
-                className="w-20 h-20 rounded-full bg-[var(--card-app)] border border-[var(--border-app)] flex items-center justify-center text-[var(--accent-app)] mb-8 shadow-sm"
+                initial={{ opacity: 0, y: 10 }}
+                animate={{ opacity: 1, y: 0 }}
+                className="mb-10"
               >
-                <Sparkles size={40} />
+                <h2 className="text-2xl sm:text-3xl font-normal text-[var(--text-secondary)] mb-1">
+                  Hi there,
+                </h2>
+                <h1 className="text-3xl sm:text-5xl font-medium tracking-tight text-[var(--text-app)]">
+                  Where should we start?
+                </h1>
               </motion.div>
-              <h2 className="text-4xl font-light mb-4 tracking-tight text-[var(--text-app)] leading-none">iluv</h2>
-              <p className="text-[var(--text-secondary)] mb-10 font-medium tracking-wide">
-                Secure. Minimal. Direct. Your private intelligence architecture.
-              </p>
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 w-full">
+              
+              <div className="flex flex-col gap-3 w-full">
                 {[
-                  { icon: Table, text: "Data Visualisation", cmd: "Generate a markdown table for a 5-year global tech revenue analysis, then provide a JSON configuration for a 'recharts' bar chart of the data inside a ```recharts code block. Ensure the JSON has: type ('bar'), data (array of objects), xAxisKey (string), and series (array of {key, color} objects)." },
-                  { icon: Layout, text: "Strategic Roadmap", cmd: "Create a 3-month strategic plan for a boutique startup" },
-                  { icon: Command, text: "System Synthesis", cmd: "Explain the core mechanics of privacy-focused AI" },
-                  { icon: FileText, text: "Technical Drafting", cmd: "Draft a concise executive report on market trends" }
+                  { icon: Command, text: "Explore concepts", cmd: "Explain the core mechanics of privacy-focused AI" },
+                  { icon: ImageIcon, text: "Create image", cmd: "Generate an image of a futuristic workspace" },
+                  { icon: Headphones, text: "Create music", cmd: "Compose a 30-second lo-fi track" },
+                  { icon: FileText, text: "Write anything", cmd: "Draft a concise executive report on market trends" }
                 ].map((item, idx) => (
                   <button 
                     key={idx}
                     onClick={() => setInput(item.cmd)}
-                    className="flex items-center gap-4 p-5 bg-[var(--card-app)] border border-[var(--border-app)] rounded-xl hover:border-[var(--accent-app)] hover:bg-[var(--border-app)] transition-all text-left group"
+                    className="flex items-center gap-3 py-3 px-5 sm:px-6 bg-[var(--card-app)] border border-[var(--border-app)] rounded-full hover:bg-[var(--border-app)] transition-all text-left group w-fit"
                   >
-                    <item.icon size={20} className="text-[var(--accent-app)] group-hover:scale-110 transition-transform" />
-                    <span className="text-[var(--text-app)] font-bold text-sm uppercase tracking-widest">{item.text}</span>
+                    <item.icon size={18} className="text-[var(--text-app)] opacity-70 group-hover:opacity-100 transition-opacity" />
+                    <span className="text-[var(--text-app)] font-medium text-sm sm:text-base">{item.text}</span>
                   </button>
                 ))}
               </div>
@@ -2071,21 +2061,14 @@ export default function App() {
                 )}
               </AnimatePresence>
 
-              <div className="flex items-end gap-2 sm:gap-3 bg-[var(--card-app)] border border-[var(--border-app)] focus-within:border-[var(--accent-app)] rounded-2xl p-2 pl-4 sm:p-3 sm:pl-5 transition-all shadow-md">
-                <div className="flex gap-1 mb-1 sm:mb-1">
-                  <button 
-                    onClick={() => setShowParamMenu(!showParamMenu)}
-                    className={`p-2 sm:p-3 rounded-xl sm:rounded-2xl transition-all ${showParamMenu ? 'bg-[var(--accent-app)]/10 text-[var(--accent-app)]' : 'hover:bg-[var(--border-app)] text-[var(--text-secondary)] hover:text-[var(--accent-app)]'}`}
-                    title="Strategy Settings"
-                  >
-                    <Sliders size={20} className="sm:w-6 sm:h-6" />
-                  </button>
+              <div className="flex items-end gap-2 bg-[var(--card-app)] border border-[var(--border-app)] focus-within:border-[var(--accent-app)] rounded-3xl p-2 pl-4 transition-all shadow-md">
+                <div className="flex items-center pb-2">
                   <button 
                     onClick={() => fileInputRef.current?.click()}
-                    className="p-2 sm:p-3 rounded-xl sm:rounded-2xl hover:bg-[var(--border-app)] text-[var(--text-secondary)] hover:text-[var(--accent-app)] transition-all"
+                    className="p-2 rounded-full hover:bg-[var(--border-app)] text-[var(--text-secondary)] transition-all"
                     title="Upload Context"
                   >
-                    <ImageIcon size={20} className="sm:w-6 sm:h-6" />
+                    <Plus size={24} />
                   </button>
                   <input 
                     type="file" 
@@ -2095,6 +2078,13 @@ export default function App() {
                     multiple 
                     accept="image/*,application/pdf,text/plain,text/markdown"
                   />
+                  <button 
+                    onClick={() => setShowParamMenu(!showParamMenu)}
+                    className={`p-2 mx-1 rounded-full transition-all ${showParamMenu ? 'bg-[var(--accent-app)]/10 text-[var(--text-app)]' : 'hover:bg-[var(--border-app)] text-[var(--text-secondary)] hover:text-[var(--text-app)]'}`}
+                    title="Strategy Settings"
+                  >
+                    <Sliders size={20} />
+                  </button>
                 </div>
                 <textarea 
                   ref={textareaRef}
@@ -2106,26 +2096,25 @@ export default function App() {
                       handleSendMessage();
                     }
                   }}
-                  placeholder="Initiate sequence..."
+                  placeholder="Ask iluv"
                   rows={1}
-                  className="flex-1 max-h-48 sm:max-h-64 bg-transparent border-none focus:ring-0 text-[var(--text-app)] placeholder-[var(--text-secondary)] resize-none py-3 scroll-hide font-semibold text-base sm:text-lg tracking-tight leading-relaxed"
+                  className="flex-1 max-h-48 sm:max-h-64 bg-transparent border-none focus:ring-0 text-[var(--text-app)] placeholder-[var(--text-secondary)] resize-none py-3 scroll-hide font-normal text-base sm:text-lg leading-relaxed outline-none"
                 />
-                <button 
-                  onClick={() => handleSendMessage()}
-                  disabled={!input.trim() || isSessionLoading(activeSessionId)}
-                  className={`p-3 sm:p-4 rounded-xl transition-all shadow-sm ${
-                    input.trim() 
-                      ? 'bg-[var(--text-app)] text-[var(--bg-app)] hover:opacity-90 active:scale-95' 
-                      : 'bg-[var(--border-app)] text-[var(--text-secondary)] opacity-50'
-                  }`}
-                >
-                  <Send size={18} className="sm:w-6 sm:h-6" />
-                </button>
+                <div className="flex items-center pb-2">
+                  <button 
+                    onClick={() => handleSendMessage()}
+                    disabled={!input.trim() || isSessionLoading(activeSessionId)}
+                    className={`p-2 rounded-full transition-all ${
+                      input.trim() 
+                        ? 'text-[var(--text-app)] hover:opacity-80 active:scale-95' 
+                        : 'text-[var(--text-secondary)] opacity-50'
+                    }`}
+                  >
+                    <Send size={20} />
+                  </button>
+                </div>
               </div>
             </div>
-          </div>
-          <div className="text-center mt-6 text-[10px] text-[var(--text-secondary)] tracking-widest font-medium opacity-60">
-            iluv <span className="text-[#3b82f6]">|</span> ARCHITECT OF SECURE INTELLIGENCE
           </div>
         </div>
       </div>
