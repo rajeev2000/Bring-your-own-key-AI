@@ -3,10 +3,42 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
-    <meta name="theme-color" content="#f97316" media="(prefers-color-scheme: light)" />
-    <meta name="theme-color" content="#3b82f6" media="(prefers-color-scheme: dark)" />
+    <meta id="theme-color-meta" name="theme-color" content="#f8f9fa" />
+    <script>
+      (function() {
+        try {
+          var saved = localStorage.getItem('iluv_settings');
+          var isDark = false;
+          if (saved) {
+            var parsed = JSON.parse(saved);
+            isDark = parsed.themePreset === 'dark';
+          }
+          if (isDark) {
+            document.documentElement.classList.add('dark');
+            document.documentElement.style.setProperty('color-scheme', 'dark');
+            document.documentElement.style.setProperty('--bg-app', '#000000');
+            document.documentElement.style.setProperty('--text-app', '#ffffff');
+            document.documentElement.style.setProperty('--accent-app', '#d4d4d8');
+            document.documentElement.style.setProperty('--border-app', '#27272a');
+            document.documentElement.style.setProperty('--card-app', '#09090b');
+            document.documentElement.style.setProperty('--text-secondary', '#a1a1aa');
+            document.getElementById('theme-color-meta').setAttribute('content', '#000000');
+          } else {
+            document.documentElement.classList.remove('dark');
+            document.documentElement.style.setProperty('color-scheme', 'light');
+            document.documentElement.style.setProperty('--bg-app', '#f8f9fa');
+            document.documentElement.style.setProperty('--text-app', '#27272a');
+            document.documentElement.style.setProperty('--accent-app', '#52525b');
+            document.documentElement.style.setProperty('--border-app', '#e5e7eb');
+            document.documentElement.style.setProperty('--card-app', '#ffffff');
+            document.documentElement.style.setProperty('--text-secondary', '#71717a');
+            document.getElementById('theme-color-meta').setAttribute('content', '#f8f9fa');
+          }
+        } catch (e) {}
+      })();
+    </script>
     <meta name="apple-mobile-web-app-capable" content="yes" />
-    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="default" />
     <title>LUX - Ultra-Premium AI</title>
   </head>
   <body>

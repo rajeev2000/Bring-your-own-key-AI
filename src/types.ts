@@ -20,6 +20,19 @@ export interface Message {
   audioUrl?: string;
 }
 
+export interface AIProfile {
+  id: string;
+  name: string;
+  description: string;
+  icon?: string;
+  instructions: string;
+  tone?: string;
+  knowledgeFiles?: Attachment[];
+  defaultModel?: string;
+  memory?: string;
+  createdAt: number;
+}
+
 export interface ChatSession {
   id: string;
   title: string;
@@ -28,6 +41,7 @@ export interface ChatSession {
   updatedAt: number;
   isArchived?: boolean;
   studyMode?: boolean;
+  profileId?: string;
 }
 
 export interface ProviderConfig {
@@ -46,6 +60,7 @@ export interface AppSettings {
   maxOutputTokens?: number;
   themePreset?: 'dark' | 'light';
   chatMemory?: string;
+  profiles?: AIProfile[];
 }
 
 export const DEFAULT_MODEL = 'gemini-3-flash-preview';

@@ -49,7 +49,7 @@ import * as XLSX from 'xlsx';
 import { Document, Packer, Paragraph, TextRun } from 'docx';
 import { LineChart, Line, BarChart, Bar, PieChart, Pie, AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip as RechartsTooltip, Legend, ResponsiveContainer } from 'recharts';
 
-import { Message, ChatSession, AppSettings, DEFAULT_MODEL, DEFAULT_BASE_URL, Attachment } from './types';
+import { Message, ChatSession, AppSettings, DEFAULT_MODEL, DEFAULT_BASE_URL, Attachment, AIProfile } from './types';
 import { NotificationSystem } from './lib/NotificationSystem';
 
 const generateId = () => {
@@ -112,6 +112,9 @@ export default function App() {
   const [loadingSessions, setLoadingSessions] = useState<Set<string>>(new Set());
   const [error, setError] = useState<string | null>(null);
   const [showSettings, setShowSettings] = useState(false);
+  const [showProfilesList, setShowProfilesList] = useState(false);
+  const [editingProfile, setEditingProfile] = useState<Partial<AIProfile> | null>(null);
+  const [activeProfileId, setActiveProfileId] = useState<string | null>(null);
   const [restoreAsMemory, setRestoreAsMemory] = useState(false);
   const [showManageSessions, setShowManageSessions] = useState(false);
   const [selectedSessionIds, setSelectedSessionIds] = useState<Set<string>>(new Set());
@@ -149,7 +152,6 @@ export default function App() {
       if (!parsed.activeProviderId || (parsed.activeProviderId !== 'gemini' && parsed.activeProviderId !== 'openai')) {
          parsed.activeProviderId = 'gemini';
       }
-      parsed.themePreset = 'light';
       return parsed;
     }
     return {
@@ -739,6 +741,11 @@ export default function App() {
       root.style.setProperty(key, value);
     });
 
+    const metaTheme = document.getElementById('theme-color-meta');
+    if (metaTheme) {
+      metaTheme.setAttribute('content', themeColors['--bg-app']);
+    }
+
     if (preset === 'light') {
       root.classList.remove('dark');
     } else {
@@ -811,33 +818,58 @@ export default function App() {
     const file = e.target.files?.[0];
     if (!file) return;
 
+    if (file.type && file.type !== "application/json" && !file.name.endsWith(".json")) {
+        alert("Please select a valid JSON backup file.");
+        e.target.value = '';
+        return;
+    }
+
     const reader = new FileReader();
     reader.onload = (event) => {
       try {
         const text = event.target?.result as string;
-        const parsed = JSON.parse(text) as ChatSession[];
+        const parsed = JSON.parse(text);
         
-        if (!Array.isArray(parsed) || !parsed[0]?.id) throw new Error("Invalid backup format");
+        if (!Array.isArray(parsed)) {
+            throw new Error("Backup file must contain an array of sessions.");
+        }
+        
+        // Ensure at least basic shape matches ChatSession
+        const validSessions = parsed.filter(item => item && typeof item.id === 'string' && Array.isArray(item.messages)) as ChatSession[];
+
+        if (validSessions.length === 0 && parsed.length > 0) {
+            throw new Error("No valid chat sessions found in backup.");
+        }
 
         if (restoreAsMemory) {
-          const formattedMemory = parsed.map(s => `CHAT [${s.title}]:\n` + s.messages.map(m => `${m.role.toUpperCase()}: ${m.content}`).join('\n')).join('\n\n');
+          const formattedMemory = validSessions.map(s => `CHAT [${s.title || 'Untitled'}]:\n` + s.messages.map((m: any) => `${(m.role || 'user').toUpperCase()}: ${m.content}`).join('\n')).join('\n\n');
           setSettings(prev => ({
             ...prev,
             chatMemory: (prev.chatMemory ? prev.chatMemory + '\n\n' : '') + formattedMemory
           }));
-          alert('Chat data successfully loaded into memory context!');
+          alert(`Success! Data from ${validSessions.length} chats loaded into memory context.`);
         } else {
           // Add to existing sessions without overriding existing unique IDs
           const existingIds = new Set(sessions.map(s => s.id));
-          const toAdd = parsed.filter(s => !existingIds.has(s.id));
+          const toAdd = validSessions.filter(s => !existingIds.has(s.id));
+          
+          if (toAdd.length === 0 && validSessions.length > 0) {
+              alert("All sessions in the backup are already present in your app.");
+              return;
+          }
+
           setSessions(prev => [...toAdd, ...prev].sort((a, b) => b.createdAt - a.createdAt));
-          alert(`Restored ${toAdd.length} new sessions.`);
+          alert(`Successfully restored ${toAdd.length} new sessions.`);
         }
       } catch (err) {
         console.error("Failed to restore sessions", err);
-        alert('Failed to restore sessions. Invalid file format.');
+        alert('Restore failed: ' + (err instanceof Error ? err.message : 'Invalid file structure or corrupted data.'));
       }
       e.target.value = ''; // reset
+    };
+    reader.onerror = () => {
+        alert("Error reading file. Please try again.");
+        e.target.value = '';
     };
     reader.readAsText(file);
   };
@@ -847,7 +879,7 @@ export default function App() {
   const getActiveSession = () => sessions.find(s => s.id === activeSessionId);
   const isSessionLoading = (id: string | null) => id ? loadingSessions.has(id) : false;
 
-  const createNewSession = () => {
+  const createNewSession = (profileId?: string) => {
     setError(null);
     const newSession: ChatSession = {
       id: generateId(),
@@ -855,10 +887,12 @@ export default function App() {
       messages: [],
       createdAt: Date.now(),
       updatedAt: Date.now(),
-      studyMode: false
+      studyMode: false,
+      profileId: profileId
     };
     setSessions([newSession, ...sessions]);
     setActiveSessionId(newSession.id);
+    if (window.innerWidth < 640) setSidebarOpen(false); // Close sidebar on mobile
   };
 
   const deleteSession = (id: string) => {
@@ -1107,20 +1141,29 @@ export default function App() {
       }
 
       const currentSession = updatedSessions.find(s => s.id === sessionId)!;
-      const model = settings.model || DEFAULT_MODEL;
+      const profile = currentSession.profileId ? settings.profiles?.find(p => p.id === currentSession.profileId) : null;
+      const model = profile?.defaultModel || settings.model || DEFAULT_MODEL;
       const isGemini = provider.baseUrl.includes('generative');
 
-      let sysInstruction = "You are a highly efficient AI assistant focused on 100% accuracy and direct utility. \n\nCORE PROTOCOLS:\n1. DIRECTNESS: Provide the requested answer immediately. Skip all introductory phrases, 'luxury' descriptors (elite, bespoke, etc.), and concluding summaries unless they contain essential data.\n2. CLARIFICATION: If a request is broad, ambiguous, or lacks specific parameters (e.g., format, scope, target audience), you MUST pause and ask clarifying questions. Use the <options> format to provide 3-5 distinct paths for the user to choose from to ensure a correct result.\n3. FORMATTING: Wrap clarify options in: <options>{\"query\": \"Clarifying Question?\", \"options\": [\"Option A\", \"Option B\"]}</options>. Use GFM tables for data.\n4. CONCISENESS: Keep explanations minimal and strictly technical unless 'detailed explanation' is requested.";
+      let sysInstruction = "";
       
-      if (currentSession.studyMode) {
-        sysInstruction = "You are a patient and structured Study Assistant. Your goal is to guide the user towards understanding using educational best practices.\n\nSTUDY MODE PROTOCOLS:\n1. STRUCTURE: You MUST always output a structured response with clear Markdown headings for: 'Concept Explanation', 'Step-by-Step Breakdown', 'Guided Learning', and 'Analogy' (if applicable).\n2. AVOID NORMAL CHAT: Do NOT reply with a standard conversational response. ALWAYS use the structured format described above for every response.\n3. CONCEPT EXPLANATION: Briefly explain the underlying 'why' behind the topic or answer.\n4. STEP-BY-STEP: Break down complex problems into logical, numbered steps.\n5. GUIDED LEARNING: Do not just give the final answer; show the thought process clearly.\n6. TONE: Maintain an encouraging, academic, yet clear and accessible tone.\n7. CLARIFICATION & FORMATTING: Keep the standard <options> and GFM table tools available for layout.";
+      if (profile) {
+        sysInstruction = profile.instructions;
+        if (profile.tone) sysInstruction += `\n\nTONE PREFERENCE: ${profile.tone}`;
+        if (profile.memory) sysInstruction += `\n\PROFILE MEMORY/NOTES:\n${profile.memory}`;
+      } else {
+        sysInstruction = "You are a highly efficient AI assistant focused on 100% accuracy and direct utility. \n\nCORE PROTOCOLS:\n1. DIRECTNESS: Provide the requested answer immediately. Skip all introductory phrases, 'luxury' descriptors (elite, bespoke, etc.), and concluding summaries unless they contain essential data.\n2. CLARIFICATION: If a request is broad, ambiguous, or lacks specific parameters (e.g., format, scope, target audience), you MUST pause and ask clarifying questions. Use the <options> format to provide 3-5 distinct paths for the user to choose from to ensure a correct result.\n3. FORMATTING: Wrap clarify options in: <options>{\"query\": \"Clarifying Question?\", \"options\": [\"Option A\", \"Option B\"]}</options>. Use GFM tables for data.\n4. CONCISENESS: Keep explanations minimal and strictly technical unless 'detailed explanation' is requested.";
+      
+        if (currentSession.studyMode) {
+          sysInstruction = "You are a patient and structured Study Assistant. Your goal is to guide the user towards understanding using educational best practices.\n\nSTUDY MODE PROTOCOLS:\n1. STRUCTURE: You MUST always output a structured response with clear Markdown headings for: 'Concept Explanation', 'Step-by-Step Breakdown', 'Guided Learning', and 'Analogy' (if applicable).\n2. AVOID NORMAL CHAT: Do NOT reply with a standard conversational response. ALWAYS use the structured format described above for every response.\n3. CONCEPT EXPLANATION: Briefly explain the underlying 'why' behind the topic or answer.\n4. STEP-BY-STEP: Break down complex problems into logical, numbered steps.\n5. GUIDED LEARNING: Do not just give the final answer; show the thought process clearly.\n6. TONE: Maintain an encouraging, academic, yet clear and accessible tone.\n7. CLARIFICATION & FORMATTING: Keep the standard <options> and GFM table tools available for layout.";
+        }
       }
 
       if (settings.maxOutputTokens !== undefined && settings.maxOutputTokens > 0) {
-        sysInstruction += `\n5. TOKEN BUDGET: Strictly fit within ${settings.maxOutputTokens} tokens. Finish thoughts completely.`;
+        sysInstruction += `\n\nTOKEN BUDGET: Strictly fit within ${settings.maxOutputTokens} tokens. Finish thoughts completely.`;
       }
 
-      if (settings.chatMemory) {
+      if (!profile && settings.chatMemory) {
         sysInstruction += `\n\nBACKGROUND MEMORY: Below is context from past restored sessions for your reference:\n${settings.chatMemory}\n`;
       }
 
@@ -1489,7 +1532,7 @@ export default function App() {
 
             <div className="p-4">
               <button 
-                onClick={createNewSession}
+                onClick={() => createNewSession(activeProfileId || undefined)}
                 className="w-full flex items-center justify-center gap-2 py-3 px-4 bg-[var(--text-app)] text-[var(--bg-app)] rounded-md font-medium shadow-sm active:scale-[0.98] transition-all"
               >
                 <Plus size={20} />
@@ -1508,7 +1551,13 @@ export default function App() {
                       : 'hover:bg-[var(--border-app)]'
                   }`}
                 >
-                  <MessageSquare size={18} className={activeSessionId === s.id ? 'text-[var(--accent-app)]' : 'text-[var(--text-app)] opacity-60'} />
+                  <div className={`flex items-center justify-center w-6 h-6 shrink-0 ${activeSessionId === s.id ? 'text-[var(--accent-app)]' : 'text-[var(--text-app)] opacity-60'}`}>
+                    {s.profileId && settings.profiles?.find(p => p.id === s.profileId) ? (
+                      <span className="text-lg leading-none">{settings.profiles.find(p => p.id === s.profileId)!.icon || '🤖'}</span>
+                    ) : (
+                      <MessageSquare size={18} />
+                    )}
+                  </div>
                   <div className="flex-1 overflow-hidden">
                     <div className="text-sm font-bold truncate tracking-tight text-[var(--text-app)]">{s.title}</div>
                     <div className="text-[10px] text-[var(--text-secondary)] mt-0.5 uppercase tracking-wider font-medium">{new Date(s.updatedAt).toLocaleDateString()}</div>
@@ -1560,6 +1609,13 @@ export default function App() {
                   </motion.div>
                 )}
               </AnimatePresence>
+              <button 
+                onClick={() => setShowProfilesList(true)}
+                className="flex items-center justify-center gap-2 p-2.5 rounded-none hover:bg-[var(--border-app)] transition-colors text-[11px] font-black uppercase tracking-widest text-[var(--text-app)] w-full mb-1"
+              >
+                <Sparkles size={16} />
+                <span>AI Profiles</span>
+              </button>
               <button 
                 onClick={() => setShowSettings(true)}
                 className="flex items-center justify-center gap-2 p-2.5 rounded-none hover:bg-[var(--border-app)] transition-colors text-[11px] font-black uppercase tracking-widest text-[var(--text-app)] w-full"
@@ -1649,15 +1705,25 @@ export default function App() {
              </button>
           </div>
           
-          <div className="flex-1 flex justify-center">
-            <h1 className="text-xl font-medium tracking-tight text-[var(--text-app)]">
-               iluv
+          <div className="flex-1 flex justify-center flex-col items-center cursor-pointer hover:opacity-80 transition-opacity" onClick={() => setShowProfilesList(true)} title="Switch AI Profile">
+            <h1 className="text-xl font-medium tracking-tight text-[var(--text-app)] flex items-center gap-2">
+               {activeSessionId && getActiveSession()?.profileId ? (
+                 <>
+                   <span>{settings.profiles?.find(p => p.id === getActiveSession()?.profileId)?.icon || '🤖'}</span>
+                   {settings.profiles?.find(p => p.id === getActiveSession()?.profileId)?.name || 'iluv'}
+                 </>
+               ) : (
+                 'iluv'
+               )}
              </h1>
+             {activeSessionId && getActiveSession()?.profileId && (
+               <span className="text-[10px] text-[var(--text-secondary)] uppercase tracking-widest font-bold">AI Profile Active</span>
+             )}
           </div>
           
           <div className="flex-1 flex justify-end gap-2">
             <button 
-              onClick={createNewSession}
+              onClick={() => createNewSession(activeProfileId || undefined)}
               className="p-2 hover:bg-[var(--border-app)] rounded-full transition-colors text-[var(--text-app)]"
               title="New Chat"
             >
@@ -2118,6 +2184,286 @@ export default function App() {
           </div>
         </div>
       </div>
+
+      {/* AI Profiles List Modal */}
+      <AnimatePresence>
+        {showProfilesList && !editingProfile && (
+          <div className="fixed inset-0 z-[60] flex items-center justify-center p-4">
+            <motion.div 
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              onClick={() => setShowProfilesList(false)}
+              className="absolute inset-0 bg-black/60 backdrop-blur-sm"
+            />
+            <motion.div 
+              initial={{ opacity: 0, scale: 0.95, y: 10 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.95, y: 10 }}
+              className="relative w-full max-w-2xl bg-[var(--bg-app)] border border-[var(--border-app)] rounded-2xl shadow-2xl overflow-hidden flex flex-col max-h-[85vh]"
+            >
+              <div className="p-6 border-b border-[var(--border-app)] flex justify-between items-center bg-[var(--card-app)]">
+                <div>
+                  <h2 className="text-xl font-medium tracking-tight">AI Profiles</h2>
+                  <p className="text-sm text-[var(--text-secondary)] mt-1">Create customized assistants for specific tasks.</p>
+                </div>
+                <button 
+                  onClick={() => setShowProfilesList(false)}
+                  className="p-2 hover:bg-[var(--border-app)] rounded-full transition-colors"
+                >
+                  <X size={20} />
+                </button>
+              </div>
+
+              <div className="p-6 overflow-y-auto custom-scrollbar flex-1 space-y-4">
+                {/* Default Assistant */}
+                <div 
+                  className={`p-4 border rounded-xl flex items-center justify-between transition-all cursor-pointer ${!getActiveSession()?.profileId ? 'border-[var(--accent-app)] bg-[var(--accent-app)]/5' : 'border-[var(--border-app)] hover:border-[var(--text-secondary)] bg-[var(--card-app)]'}`}
+                  onClick={() => { 
+                    setActiveProfileId(null);
+                    if (activeSessionId) {
+                      setSessions(prev => prev.map(s => s.id === activeSessionId ? { ...s, profileId: undefined } : s));
+                    } else {
+                      createNewSession(undefined);
+                    }
+                    setShowProfilesList(false); 
+                  }}
+                >
+                  <div className="flex items-center gap-4">
+                    <div className="w-12 h-12 rounded-full bg-[var(--bg-app)] border border-[var(--border-app)] flex items-center justify-center text-[var(--accent-app)]">
+                      <Sparkles size={24} />
+                    </div>
+                    <div>
+                      <h3 className="font-medium text-[var(--text-app)] text-lg">Default Assistant</h3>
+                      <p className="text-sm text-[var(--text-secondary)] mt-0.5">The standard intelligent AI.</p>
+                    </div>
+                  </div>
+                  {!getActiveSession()?.profileId && (
+                    <div className="flex items-center gap-1 text-[var(--accent-app)] text-sm font-medium bg-[var(--accent-app)]/10 px-3 py-1 rounded-full">
+                      <Check size={16} /> Selected
+                    </div>
+                  )}
+                </div>
+
+                {/* Custom Profiles */}
+                {settings.profiles?.map(profile => (
+                  <div 
+                    key={profile.id}
+                    className={`group p-4 border rounded-xl flex items-center justify-between transition-all ${getActiveSession()?.profileId === profile.id ? 'border-[var(--accent-app)] bg-[var(--accent-app)]/5' : 'border-[var(--border-app)] hover:border-[var(--text-secondary)] bg-[var(--card-app)]'}`}
+                  >
+                    <div 
+                      className="flex items-center gap-4 cursor-pointer flex-1"
+                      onClick={() => { 
+                        setActiveProfileId(profile.id);
+                        if (activeSessionId) {
+                          setSessions(prev => prev.map(s => s.id === activeSessionId ? { ...s, profileId: profile.id } : s));
+                        } else {
+                          createNewSession(profile.id);
+                        }
+                        setShowProfilesList(false); 
+                      }}
+                    >
+                      <div className="w-12 h-12 rounded-full border border-[var(--border-app)] flex items-center justify-center text-[var(--text-app)] text-xl bg-[var(--bg-app)]">
+                        {profile.icon || '🤖'}
+                      </div>
+                      <div>
+                        <h3 className="font-medium text-[var(--text-app)] text-lg">{profile.name}</h3>
+                        <p className="text-sm text-[var(--text-secondary)] mt-0.5 line-clamp-1">{profile.description}</p>
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <button 
+                        onClick={(e) => { e.stopPropagation(); setEditingProfile(profile); }}
+                        className="p-2 text-[var(--text-secondary)] hover:text-[var(--text-app)] hover:bg-[var(--border-app)] rounded-lg transition-colors"
+                        title="Edit Profile"
+                      >
+                        <Settings size={18} />
+                      </button>
+                      <button 
+                        onClick={(e) => { 
+                          e.stopPropagation(); 
+                          if(confirm('Are you sure you want to delete this profile?')) {
+                            setSettings(s => ({ ...s, profiles: s.profiles?.filter(p => p.id !== profile.id) }));
+                            if(activeProfileId === profile.id) setActiveProfileId(null);
+                          }
+                        }}
+                        className="p-2 text-red-500 hover:bg-red-500/10 rounded-lg transition-colors"
+                        title="Delete Profile"
+                      >
+                        <Trash2 size={18} />
+                      </button>
+                      {activeProfileId === profile.id && (
+                        <div className="ml-2 flex items-center gap-1 text-[var(--accent-app)] text-sm font-medium bg-[var(--accent-app)]/10 px-3 py-1 rounded-full">
+                          <Check size={16} /> Active
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                ))}
+              </div>
+
+              <div className="p-6 border-t border-[var(--border-app)] bg-[var(--card-app)] flex justify-end">
+                <button
+                  onClick={() => setEditingProfile({ id: generateId(), name: '', description: '', instructions: '', icon: '🤖' })}
+                  className="px-6 py-3 bg-[var(--text-app)] text-[var(--bg-app)] font-medium rounded-lg hover:opacity-90 transition-opacity flex items-center gap-2"
+                >
+                  <Plus size={18} />
+                  Create New Profile
+                </button>
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
+      {/* Profile Editor Modal */}
+      <AnimatePresence>
+        {editingProfile && (
+          <div className="fixed inset-0 z-[70] flex items-center justify-center p-4">
+            <motion.div 
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              onClick={() => setEditingProfile(null)}
+              className="absolute inset-0 bg-black/60 backdrop-blur-sm"
+            />
+            <motion.div 
+              initial={{ opacity: 0, scale: 0.95, y: 10 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.95, y: 10 }}
+              className="relative w-full max-w-3xl bg-[var(--card-app)] border border-[var(--border-app)] rounded-2xl shadow-2xl overflow-hidden flex flex-col max-h-[90vh]"
+            >
+              <div className="p-6 border-b border-[var(--border-app)] flex justify-between items-center bg-[var(--bg-app)]">
+                <h2 className="text-xl font-medium tracking-tight">
+                  {settings.profiles?.some(p => p.id === editingProfile.id) ? 'Edit Profile' : 'Create Profile'}
+                </h2>
+                <button 
+                  onClick={() => setEditingProfile(null)}
+                  className="p-2 hover:bg-[var(--border-app)] rounded-full transition-colors"
+                >
+                  <X size={20} />
+                </button>
+              </div>
+
+              <div className="p-6 overflow-y-auto custom-scrollbar flex-1 space-y-6">
+                <div className="flex gap-4">
+                  <div className="flex-1">
+                     <label className="block text-sm font-medium text-[var(--text-secondary)] mb-1">Name</label>
+                     <input 
+                       type="text"
+                       value={editingProfile.name || ''}
+                       onChange={e => setEditingProfile(p => ({ ...p!, name: e.target.value }))}
+                       placeholder="e.g. Senior Code Reviewer"
+                       className="w-full bg-[var(--bg-app)] border border-[var(--border-app)] rounded-lg p-3 text-[var(--text-app)] focus:border-[var(--accent-app)] focus:ring-1 focus:ring-[var(--accent-app)] outline-none transition-all placeholder:opacity-40"
+                     />
+                  </div>
+                  <div className="w-24">
+                     <label className="block text-sm font-medium text-[var(--text-secondary)] mb-1">Emoji Icon</label>
+                     <input 
+                       type="text"
+                       value={editingProfile.icon || ''}
+                       onChange={e => setEditingProfile(p => ({ ...p!, icon: e.target.value }))}
+                       placeholder="🤖"
+                       className="w-full bg-[var(--bg-app)] border border-[var(--border-app)] rounded-lg p-3 text-[var(--text-app)] focus:border-[var(--accent-app)] focus:ring-1 focus:ring-[var(--accent-app)] outline-none transition-all text-center text-xl"
+                     />
+                  </div>
+                </div>
+
+                <div>
+                  <label className="block text-sm font-medium text-[var(--text-secondary)] mb-1">Short Description</label>
+                  <input 
+                    type="text"
+                    value={editingProfile.description || ''}
+                    onChange={e => setEditingProfile(p => ({ ...p!, description: e.target.value }))}
+                    placeholder="Briefly describe what this profile does..."
+                    className="w-full bg-[var(--bg-app)] border border-[var(--border-app)] rounded-lg p-3 text-[var(--text-app)] focus:border-[var(--accent-app)] focus:ring-1 focus:ring-[var(--accent-app)] outline-none transition-all placeholder:opacity-40"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-sm font-medium text-[var(--text-secondary)] mb-1">Custom Instructions (System Prompt)</label>
+                  <textarea 
+                    value={editingProfile.instructions || ''}
+                    onChange={e => setEditingProfile(p => ({ ...p!, instructions: e.target.value }))}
+                    placeholder="You are an expert software engineer...&#10;- Always write tests&#10;- Be concise"
+                    rows={8}
+                    className="w-full bg-[var(--bg-app)] border border-[var(--border-app)] rounded-lg p-3 text-[var(--text-app)] focus:border-[var(--accent-app)] focus:ring-1 focus:ring-[var(--accent-app)] outline-none transition-all placeholder:opacity-40 custom-scrollbar resize-y"
+                  />
+                </div>
+                
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-6">
+                  <div>
+                    <label className="block text-sm font-medium text-[var(--text-secondary)] mb-1">Tone & Style</label>
+                    <input 
+                      type="text"
+                      value={editingProfile.tone || ''}
+                      onChange={e => setEditingProfile(p => ({ ...p!, tone: e.target.value }))}
+                      placeholder="e.g. Academic, Casual, Sarcastic"
+                      className="w-full bg-[var(--bg-app)] border border-[var(--border-app)] rounded-lg p-3 text-[var(--text-app)] focus:border-[var(--accent-app)] focus:ring-1 focus:ring-[var(--accent-app)] outline-none transition-all placeholder:opacity-40"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-[var(--text-secondary)] mb-1">Default Model (Optional)</label>
+                    <select 
+                      value={editingProfile.defaultModel || ''}
+                      onChange={e => setEditingProfile(p => ({ ...p!, defaultModel: e.target.value }))}
+                      className="w-full bg-[var(--bg-app)] border border-[var(--border-app)] rounded-lg p-3 text-[var(--text-app)] focus:border-[var(--accent-app)] focus:ring-1 focus:ring-[var(--accent-app)] outline-none transition-all"
+                    >
+                      <option value="">(App Default)</option>
+                      {Object.values(fetchedModels).flat().map(m => (
+                        <option key={m.id} value={m.id}>{m.label}</option>
+                      ))}
+                    </select>
+                  </div>
+                </div>
+
+                <div>
+                  <label className="block text-sm font-medium text-[var(--text-secondary)] mb-1">Reference Notes / Memory</label>
+                  <textarea 
+                    value={editingProfile.memory || ''}
+                    onChange={e => setEditingProfile(p => ({ ...p!, memory: e.target.value }))}
+                    placeholder="Paste any permanent facts or context this profile should always know..."
+                    rows={3}
+                    className="w-full bg-[var(--bg-app)] border border-[var(--border-app)] rounded-lg p-3 text-[var(--text-app)] focus:border-[var(--accent-app)] focus:ring-1 focus:ring-[var(--accent-app)] outline-none transition-all placeholder:opacity-40 custom-scrollbar resize-y"
+                  />
+                </div>
+              </div>
+
+              <div className="p-6 border-t border-[var(--border-app)] bg-[var(--bg-app)] flex justify-end gap-3">
+                <button
+                  onClick={() => setEditingProfile(null)}
+                  className="px-6 py-2.5 bg-[var(--card-app)] border border-[var(--border-app)] text-[var(--text-app)] font-medium rounded-lg hover:bg-[var(--border-app)] transition-colors"
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={() => {
+                    if (!editingProfile.name?.trim() || !editingProfile.instructions?.trim()) {
+                      alert("Name and Instructions are required.");
+                      return;
+                    }
+                    setSettings(s => {
+                      const existing = s.profiles || [];
+                      const isUpdate = existing.some(p => p.id === editingProfile.id);
+                      let newProfiles;
+                      if (isUpdate) {
+                        newProfiles = existing.map(p => p.id === editingProfile.id ? { ...p, ...editingProfile } as import('./types').AIProfile : p);
+                      } else {
+                        newProfiles = [...existing, { ...editingProfile, id: editingProfile.id || generateId(), createdAt: Date.now() } as import('./types').AIProfile];
+                      }
+                      return { ...s, profiles: newProfiles };
+                    });
+                    setEditingProfile(null);
+                  }}
+                  className="px-6 py-2.5 bg-[var(--text-app)] text-[var(--bg-app)] font-medium rounded-lg hover:opacity-90 transition-opacity"
+                >
+                  Save Profile
+                </button>
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
 
       {/* Settings Modal */}
       <AnimatePresence>
