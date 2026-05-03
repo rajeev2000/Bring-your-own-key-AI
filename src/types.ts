@@ -16,7 +16,6 @@ export interface Message {
   responseTime?: number;
   attachments?: Attachment[];
   isStreaming?: boolean;
-  thoughtProcess?: string;
   audioUrl?: string;
 }
 

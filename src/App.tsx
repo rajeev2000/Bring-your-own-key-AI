@@ -44,7 +44,6 @@ import { motion, AnimatePresence } from 'motion/react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { GoogleGenAI } from '@google/genai';
-import { jsPDF } from 'jspdf';
 import * as XLSX from 'xlsx';
 import { Document, Packer, Paragraph, TextRun } from 'docx';
 import { LineChart, Line, BarChart, Bar, PieChart, Pie, AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip as RechartsTooltip, Legend, ResponsiveContainer } from 'recharts';
@@ -115,7 +114,6 @@ export default function App() {
   const [showProfilesList, setShowProfilesList] = useState(false);
   const [editingProfile, setEditingProfile] = useState<Partial<AIProfile> | null>(null);
   const [activeProfileId, setActiveProfileId] = useState<string | null>(null);
-  const [restoreAsMemory, setRestoreAsMemory] = useState(false);
   const [showManageSessions, setShowManageSessions] = useState(false);
   const [selectedSessionIds, setSelectedSessionIds] = useState<Set<string>>(new Set());
   const [sidebarOpen, setSidebarOpen] = useState(true);
@@ -803,77 +801,6 @@ export default function App() {
     setSelectedSessionIds(new Set());
   };
 
-  const handleExportSessions = (exportAll: boolean = false) => {
-    const sessionsToExport = exportAll ? sessions : sessions.filter(s => selectedSessionIds.has(s.id));
-    if (sessionsToExport.length === 0) return;
-    const dataStr = "data:text/json;charset=utf-8," + encodeURIComponent(JSON.stringify(sessionsToExport, null, 2));
-    const a = document.createElement('a');
-    a.href = dataStr;
-    a.download = `iluv_sessions_export_${Date.now()}.json`;
-    a.click();
-    setSelectedSessionIds(new Set());
-  };
-
-  const handleRestoreSessions = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-
-    if (file.type && file.type !== "application/json" && !file.name.endsWith(".json")) {
-        alert("Please select a valid JSON backup file.");
-        e.target.value = '';
-        return;
-    }
-
-    const reader = new FileReader();
-    reader.onload = (event) => {
-      try {
-        const text = event.target?.result as string;
-        const parsed = JSON.parse(text);
-        
-        if (!Array.isArray(parsed)) {
-            throw new Error("Backup file must contain an array of sessions.");
-        }
-        
-        // Ensure at least basic shape matches ChatSession
-        const validSessions = parsed.filter(item => item && typeof item.id === 'string' && Array.isArray(item.messages)) as ChatSession[];
-
-        if (validSessions.length === 0 && parsed.length > 0) {
-            throw new Error("No valid chat sessions found in backup.");
-        }
-
-        if (restoreAsMemory) {
-          const formattedMemory = validSessions.map(s => `CHAT [${s.title || 'Untitled'}]:\n` + s.messages.map((m: any) => `${(m.role || 'user').toUpperCase()}: ${m.content}`).join('\n')).join('\n\n');
-          setSettings(prev => ({
-            ...prev,
-            chatMemory: (prev.chatMemory ? prev.chatMemory + '\n\n' : '') + formattedMemory
-          }));
-          alert(`Success! Data from ${validSessions.length} chats loaded into memory context.`);
-        } else {
-          // Add to existing sessions without overriding existing unique IDs
-          const existingIds = new Set(sessions.map(s => s.id));
-          const toAdd = validSessions.filter(s => !existingIds.has(s.id));
-          
-          if (toAdd.length === 0 && validSessions.length > 0) {
-              alert("All sessions in the backup are already present in your app.");
-              return;
-          }
-
-          setSessions(prev => [...toAdd, ...prev].sort((a, b) => b.createdAt - a.createdAt));
-          alert(`Successfully restored ${toAdd.length} new sessions.`);
-        }
-      } catch (err) {
-        console.error("Failed to restore sessions", err);
-        alert('Restore failed: ' + (err instanceof Error ? err.message : 'Invalid file structure or corrupted data.'));
-      }
-      e.target.value = ''; // reset
-    };
-    reader.onerror = () => {
-        alert("Error reading file. Please try again.");
-        e.target.value = '';
-    };
-    reader.readAsText(file);
-  };
-
   // --- End session management ---
 
   const getActiveSession = () => sessions.find(s => s.id === activeSessionId);
@@ -911,8 +838,6 @@ export default function App() {
       return s;
     }));
   };
-
-  const [openThoughts, setOpenThoughts] = useState<Record<string, boolean>>({});
 
   const calculateSimilarity = (s1: string, s2: string) => {
     const set1 = new Set(s1.split(/\s+/));
@@ -1004,22 +929,6 @@ export default function App() {
     }));
   };
 
-  const generateAnalysis = (input: string) => {
-    const tokens = input.toLowerCase().split(/\s+/);
-    const intent = tokens.includes('how') || tokens.includes('why') ? 'Explanatory' : 
-                   tokens.includes('create') || tokens.includes('make') || tokens.includes('write') ? 'Creative/Generative' :
-                   tokens.includes('fix') || tokens.includes('code') || tokens.includes('debug') ? 'Technical/Problem Solving' : 'Informational';
-    
-    const depth = tokens.length > 15 ? 'Extensive' : tokens.length > 5 ? 'Moderate' : 'Concise';
-    
-    return JSON.stringify({
-      intent,
-      complexity: tokens.length > 10 ? 'High' : 'Standard',
-      focus: tokens.slice(0, 3).join(' ') + '...',
-      inferredAction: `Processing ${intent.toLowerCase()} request with ${depth.toLowerCase()} output configuration.`
-    }, null, 2);
-  };
-
   const handleSendMessage = async (overrideInput?: string, useCache?: string) => {
     const finalInput = overrideInput || input;
     if (!finalInput.trim()) return;
@@ -1053,13 +962,7 @@ export default function App() {
           role: 'assistant', 
           content: match.content + "\n\n*(Retrieved from local cache)*", 
           timestamp: Date.now(),
-          modelUsed: "Local Cache",
-          thoughtProcess: JSON.stringify({
-            intent: "Cache Retrieval",
-            complexity: "None",
-            focus: "Historical Match",
-            inferredAction: "Matching query with local database results to bypass LLM latency and cost."
-          })
+          modelUsed: "Local Cache"
         };
         
         setSessions(prev => {
@@ -1092,8 +995,6 @@ export default function App() {
       const activeSession = getActiveSession();
       sessionId = activeSession ? activeSession.id : generateId();
       setLoadingSessions(prev => new Set(prev).add(sessionId!));
-      
-      const analysis = generateAnalysis(currentInput);
 
       const userMessage: Message = {
         id: generateId(),
@@ -1178,8 +1079,7 @@ export default function App() {
         role: 'assistant',
         content: '',
         timestamp: Date.now(),
-        isStreaming: true,
-        thoughtProcess: analysis
+        isStreaming: true
       };
 
       setSessions(prev => prev.map(s => {
@@ -1224,27 +1124,6 @@ export default function App() {
         });
       }
     }
-  };
-
-  const exportMessageToPDF = (message: Message) => {
-    const doc = new jsPDF();
-    let y = 10;
-    doc.setFontSize(16);
-    doc.text(`iluv Response: ${new Date(message.timestamp).toLocaleString()}`, 10, y);
-    y += 10;
-    doc.setFontSize(10);
-    
-    // removing json blocks for pdf
-    const content = message.content.replace(/```recharts[\s\S]*?```/g, '[Visualisation omitted in PDF]');
-    const splitText = doc.splitTextToSize(content, 180);
-    
-    if (y + splitText.length * 5 > 280) {
-      doc.addPage();
-      y = 10;
-    }
-    
-    doc.text(splitText, 10, y);
-    doc.save(`iluv_Response_${message.id}.pdf`);
   };
 
   const exportMessageToExcel = (message: Message) => {
@@ -1771,7 +1650,7 @@ export default function App() {
               </div>
             </div>
           ) : (
-            getActiveSession()?.messages.map((m, idx) => (
+            getActiveSession()?.messages.filter(m => !m.isStreaming).map((m, idx) => (
               <motion.div 
                 initial={{ opacity: 0, y: 10 }}
                 animate={{ opacity: 1, y: 0 }}
@@ -1891,47 +1770,6 @@ export default function App() {
                     </div>
                   )}
 
-                  {m.role === 'assistant' && m.thoughtProcess && (
-                    <div className="mt-4 pt-4 border-t border-[var(--border-app)]">
-                      <button 
-                        onClick={() => setOpenThoughts(prev => ({ ...prev, [m.id]: !prev[m.id] }))}
-                        className="flex items-center gap-2 text-[10px] font-semibold uppercase tracking-wider text-[var(--text-secondary)] hover:text-[var(--accent-app)] transition-colors"
-                      >
-                        <ChevronDown size={12} className={`transition-transform ${openThoughts[m.id] ? 'rotate-180' : ''}`} />
-                        System Logic Analysis
-                      </button>
-                      <AnimatePresence>
-                        {openThoughts[m.id] && (
-                          <motion.div
-                            initial={{ height: 0, opacity: 0 }}
-                            animate={{ height: 'auto', opacity: 1 }}
-                            exit={{ height: 0, opacity: 0 }}
-                            className="overflow-hidden"
-                          >
-                            <div className="mt-3 p-4 bg-[var(--bg-app)] rounded-md border border-[var(--border-app)]">
-                              <div className="grid grid-cols-2 gap-4 mb-4">
-                                {Object.entries(JSON.parse(m.thoughtProcess)).map(([key, val]) => (
-                                  key !== 'inferredAction' && (
-                                    <div key={key}>
-                                      <span className="block text-[8px] text-[var(--text-secondary)] font-black uppercase tracking-widest mb-1">{key}</span>
-                                      <span className="text-[11px] text-[#3b82f6] font-bold">{String(val)}</span>
-                                    </div>
-                                  )
-                                ))}
-                              </div>
-                              <div className="pt-3 border-t border-[var(--border-app)]">
-                                <span className="block text-[8px] text-[var(--text-secondary)] font-black uppercase tracking-widest mb-1">Execution Strategy</span>
-                                <p className="text-[11px] text-[var(--text-app)]/70 leading-relaxed italic">
-                                  {JSON.parse(m.thoughtProcess).inferredAction}
-                                </p>
-                              </div>
-                            </div>
-                          </motion.div>
-                        )}
-                      </AnimatePresence>
-                    </div>
-                  )}
-
                    <div className={`flex flex-wrap items-center justify-between gap-y-2 mt-5 text-[11px] ${m.role === 'user' ? 'text-[var(--text-app)]/60' : 'text-[var(--text-secondary)]'}`}>
                      <span className="font-mono tracking-widest whitespace-nowrap">{new Date(m.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
                      <div className="flex items-center gap-2 flex-wrap justify-end">
@@ -1944,20 +1782,15 @@ export default function App() {
                             <button onClick={() => exportMessageToExcel(m)} className="px-3 py-1.5 hover:bg-[var(--border-app)] rounded-lg transition-all text-[var(--accent-app)] font-bold uppercase tracking-widest text-[9px] border border-[var(--accent-app)]/20">
                               Download Excel
                             </button>
-                          ) : (
-                            <button onClick={() => exportMessageToPDF(m)} className="px-3 py-1.5 hover:bg-[var(--border-app)] rounded-lg transition-all text-[var(--accent-app)] font-bold uppercase tracking-widest text-[9px] border border-[var(--accent-app)]/20">
-                              Download PDF
-                            </button>
-                          )
+                          ) : null
                         )}
                     </div>
                   </div>
                 </div>
-                {m.role === 'assistant' && (m.tokenCount || m.isStreaming) && (
+                {m.role === 'assistant' && !m.isStreaming && m.tokenCount && (
                   <div className="mt-2 ml-4">
                     <span className="inline-flex items-center gap-2 bg-transparent px-2 py-1 rounded-full font-black uppercase tracking-widest text-[9px] text-[var(--text-secondary)] border border-transparent hover:border-[var(--border-app)] hover:bg-[var(--card-app)] transition-all cursor-default">
-                      <Sparkles size={10} className={`text-[var(--accent-app)] ${m.isStreaming ? 'animate-pulse' : ''}`} /> 
-                      {m.isStreaming ? 'Computing...' : `${m.modelUsed ? `${m.modelUsed} | ` : ''}${m.tokenCount} Tokens`}
+                      {`${m.modelUsed ? `${m.modelUsed} | ` : ''}${m.tokenCount} Tokens`}
                     </span>
                   </div>
                 )}
@@ -1966,28 +1799,14 @@ export default function App() {
           )}
           {isSessionLoading(activeSessionId) && (
             <motion.div 
-               initial={{ opacity: 0, scale: 0.8 }}
-               animate={{ opacity: 1, scale: 1 }}
-               className="flex justify-start"
+               initial={{ opacity: 0 }}
+               animate={{ opacity: 1 }}
+               className="flex justify-start px-2 py-4 h-12 items-center"
             >
-              <div className="bg-[var(--card-app)] border border-[var(--border-app)] rounded-xl rounded-tl-md px-8 py-5 flex gap-4 items-center shadow-sm relative overflow-hidden group">
-                <motion.div 
-                  animate={{ 
-                    rotate: [0, 90, 180, 270, 360],
-                    scale: [1, 1.1, 1],
-                  }}
-                  transition={{ duration: 4, repeat: Infinity, ease: "linear" }}
-                  className="w-5 h-5 border-2 border-[var(--accent-app)] rounded-sm"
-                />
-                <div className="flex flex-col">
-                  <span className="text-[10px] font-black uppercase tracking-[0.4em] text-[var(--accent-app)] mb-1">Processing</span>
-                  <span className="text-xs font-bold text-[var(--text-secondary)] italic">System is calculating response...</span>
-                </div>
-                <motion.div 
-                  className="absolute inset-0 bg-gradient-to-r from-transparent via-[var(--accent-app)]/5 to-transparent -translate-x-full"
-                  animate={{ translateX: ["100%", "-100%"] }}
-                  transition={{ duration: 2, repeat: Infinity, ease: "linear" }}
-                />
+              <div className="flex gap-1.5 items-center">
+                <motion.div animate={{ opacity: [0.3, 1, 0.3] }} transition={{ repeat: Infinity, duration: 1.4, delay: 0 }} className="w-2 h-2 rounded-full bg-[var(--text-secondary)]" />
+                <motion.div animate={{ opacity: [0.3, 1, 0.3] }} transition={{ repeat: Infinity, duration: 1.4, delay: 0.2 }} className="w-2 h-2 rounded-full bg-[var(--text-secondary)]" />
+                <motion.div animate={{ opacity: [0.3, 1, 0.3] }} transition={{ repeat: Infinity, duration: 1.4, delay: 0.4 }} className="w-2 h-2 rounded-full bg-[var(--text-secondary)]" />
               </div>
             </motion.div>
           )}
@@ -2715,22 +2534,7 @@ export default function App() {
                 >
                   <Combine size={14} /> Merge ({selectedSessionIds.size})
                 </button>
-                <button
-                  onClick={() => handleExportSessions(selectedSessionIds.size === 0)}
-                  className="flex-1 flex items-center justify-center gap-2 px-4 py-3 bg-[var(--card-app)] hover:bg-[var(--border-app)] border border-[var(--border-app)] text-xs font-medium disabled:opacity-50 transition-all text-[var(--text-app)] rounded-md"
-                >
-                  <FolderDown size={14} /> 
-                  {selectedSessionIds.size > 0 ? `Backup Selected` : `Backup All`}
-                </button>
                 <div className="flex flex-col gap-2 mt-2 w-full">
-                  <label className="w-full flex items-center justify-center gap-2 px-4 py-3 bg-[var(--card-app)] hover:bg-[var(--border-app)] border border-[var(--border-app)] text-xs font-medium cursor-pointer transition-all text-[var(--accent-app)] rounded-md">
-                    <FolderUp size={14} /> Restore Backup
-                    <input type="file" className="hidden" accept=".json" onChange={handleRestoreSessions} />
-                  </label>
-                  <label className="flex items-center gap-2 px-2 pb-2 text-[10px] uppercase font-bold text-[var(--text-secondary)] whitespace-nowrap cursor-pointer">
-                    <input type="checkbox" className="accent-[var(--accent-app)]" checked={restoreAsMemory} onChange={e => setRestoreAsMemory(e.target.checked)} />
-                    Use restored chats as Memory
-                  </label>
                   {settings.chatMemory && (
                     <button
                       onClick={() => setSettings(prev => ({ ...prev, chatMemory: undefined }))}
