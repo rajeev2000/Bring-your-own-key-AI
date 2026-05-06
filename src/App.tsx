@@ -50,6 +50,7 @@ import { LineChart, Line, BarChart, Bar, PieChart, Pie, AreaChart, Area, XAxis, 
 
 import { Message, ChatSession, AppSettings, DEFAULT_MODEL, DEFAULT_BASE_URL, Attachment, AIProfile, ProviderConfig } from './types';
 import { NotificationSystem } from './lib/NotificationSystem';
+import { apiConnectionManager } from './lib/ConnectionManager';
 
 const generateId = () => {
   try {
@@ -224,7 +225,8 @@ export default function App() {
         }
       } else {
         const url = `${cleanBaseUrl(provider.baseUrl)}/v1/models`;
-        const res = await fetch(url, { headers: { 'Authorization': `Bearer ${provider.apiKey}` } });
+        const fetchConfig = apiConnectionManager.getOpenAIFetchConfig(provider);
+        const res = await fetch(url, { headers: fetchConfig.headers });
         if (res.ok) {
           const data = await res.json();
           if (data.data) {
@@ -304,10 +306,7 @@ export default function App() {
         let generatedAttachments: any[] = [];
 
         if (isGemini) {
-          const ai = new GoogleGenAI({ 
-            apiKey: provider.apiKey,
-            httpOptions: provider.baseUrl !== DEFAULT_BASE_URL ? { baseUrl: provider.baseUrl } : undefined
-          });
+          const ai = apiConnectionManager.getGeminiClient(provider);
           
           let isImagen = model.toLowerCase().includes('imagen') || model.toLowerCase().includes('nano') || model.toLowerCase().includes('image');
           let imagenSuccess = false;
@@ -481,12 +480,10 @@ export default function App() {
             else requestBody.max_tokens = maxTokens;
           }
 
+          const fetchConfig = apiConnectionManager.getOpenAIFetchConfig(provider);
           const res = await fetch(url, {
             method: 'POST',
-            headers: {
-              'Authorization': `Bearer ${provider.apiKey}`,
-              'Content-Type': 'application/json'
-            },
+            headers: fetchConfig.headers,
             body: JSON.stringify(requestBody)
           });
 
@@ -639,6 +636,7 @@ export default function App() {
 
       } catch (err: any) {
         console.error("Job failed:", err);
+        apiConnectionManager.resetConnection(job.provider);
         const currentJobs = JSON.parse(localStorage.getItem('iluv_jobs') || '[]');
         const idx = currentJobs.findIndex((j: any) => j.id === job.id);
         if (idx !== -1) {
@@ -949,10 +947,7 @@ export default function App() {
       const model = settings.model || DEFAULT_MODEL;
 
       if (isGemini) {
-        const ai = new GoogleGenAI({ 
-          apiKey: provider.apiKey,
-          httpOptions: provider.baseUrl !== DEFAULT_BASE_URL ? { baseUrl: provider.baseUrl } : undefined
-        });
+        const ai = apiConnectionManager.getGeminiClient(provider);
         const response = await ai.models.generateContent({
           model: model.includes('imagen') || model.includes('veo') ? 'gemini-3.1-flash-lite-preview' : model, 
           contents: [{ role: 'user', parts: [{ text: `Summarize this first chat message into a very short, catchy title (max 5 words). Output ONLY the title text, nothing else: "${currentInput}"` }] }]
@@ -964,12 +959,10 @@ export default function App() {
         // OpenAI compatible title generation
         const base = cleanBaseUrl(provider.baseUrl);
         const url = `${base}/v1/chat/completions`;
+        const fetchConfig = apiConnectionManager.getOpenAIFetchConfig(provider);
         const res = await fetch(url, {
           method: 'POST',
-          headers: {
-            'Authorization': `Bearer ${provider.apiKey}`,
-            'Content-Type': 'application/json'
-          },
+          headers: fetchConfig.headers,
           body: JSON.stringify({
             model: model,
             messages: [{ role: 'user', content: `Summarize this first chat message into a very short, catchy title (max 5 words). Output ONLY the title text, nothing else: "${currentInput}"` }],
@@ -1287,11 +1280,7 @@ export default function App() {
     }));
 
     try {
-      const activeBaseUrl = provider.baseUrl || DEFAULT_BASE_URL;
-      const ai = new GoogleGenAI({ 
-        apiKey: provider.apiKey, 
-        httpOptions: activeBaseUrl !== DEFAULT_BASE_URL ? { baseUrl: activeBaseUrl } : undefined
-      });
+      const ai = apiConnectionManager.getGeminiClient(provider);
       
       const textPrompt = `Convert the following response into an engaging 1-minute podcast script. Keep it enthusiastic, informative, and speak directly to the listener as a podcast host. ONLY output the script, no introductions.\n\nResponse to convert:\n"""${message.content}"""`;
       
