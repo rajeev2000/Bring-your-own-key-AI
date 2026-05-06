@@ -17,6 +17,7 @@ export interface Message {
   attachments?: Attachment[];
   isStreaming?: boolean;
   audioUrl?: string;
+  reasoningSteps?: { status: string; detail?: string, done?: boolean }[];
   clarifyOptions?: {
     query: string;
     options: string[];

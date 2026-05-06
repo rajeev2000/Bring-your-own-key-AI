@@ -48,7 +48,7 @@ import * as XLSX from 'xlsx';
 import { Document, Packer, Paragraph, TextRun } from 'docx';
 import { LineChart, Line, BarChart, Bar, PieChart, Pie, AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip as RechartsTooltip, Legend, ResponsiveContainer } from 'recharts';
 
-import { Message, ChatSession, AppSettings, DEFAULT_MODEL, DEFAULT_BASE_URL, Attachment, AIProfile } from './types';
+import { Message, ChatSession, AppSettings, DEFAULT_MODEL, DEFAULT_BASE_URL, Attachment, AIProfile, ProviderConfig } from './types';
 import { NotificationSystem } from './lib/NotificationSystem';
 
 const generateId = () => {
@@ -366,6 +366,9 @@ export default function App() {
             });
 
             const configOpts: any = { systemInstruction: sysInstruction };
+            if (isGemini && !model.toLowerCase().includes('imagen') && !model.toLowerCase().includes('veo')) {
+              configOpts.tools = [{ googleSearch: {} }]; // Ensure grounding tool is available
+            }
             if (jobSettings.temperature !== undefined) configOpts.temperature = Number(jobSettings.temperature);
             if (jobSettings.maxOutputTokens !== undefined) configOpts.maxOutputTokens = Number(jobSettings.maxOutputTokens);
 
@@ -375,10 +378,21 @@ export default function App() {
               config: configOpts
             });
 
+            let reasoningLog = [
+              { status: "Connecting to provider...", done: true },
+              { status: "Generating tool execution or response...", done: false }
+            ];
+
             for await (const chunk of responseStream) {
               fullText += (chunk.text || '');
               if (chunk.usageMetadata) finalTokens = chunk.usageMetadata.candidatesTokenCount || 0;
               
+              if (chunk.candidates?.[0]?.groundingMetadata) {
+                if (chunk.candidates[0].groundingMetadata.webSearchQueries?.length > 0 && !reasoningLog.some(r => r.status.includes('Searched'))) {
+                  reasoningLog.push({ status: `Searched Google: ${chunk.candidates[0].groundingMetadata.webSearchQueries[0]}`, done: true });
+                }
+              }
+
               if (chunk.candidates?.[0]?.content?.parts) {
                 chunk.candidates[0].content.parts.forEach((p: any) => {
                   if (p.inlineData?.data) {
@@ -401,7 +415,7 @@ export default function App() {
               setSessions(prev => prev.map(s => s.id === sessionId ? {
                   ...s,
                   messages: s.messages.map(m => m.id === assistantMessageId ? { 
-                    ...m, content: fullText.replace(/<options>.*?<\/options>/s, '').trim(), modelUsed: model, attachments: generatedAttachments.length > 0 ? generatedAttachments : undefined
+                    ...m, content: fullText.replace(/<options>.*?<\/options>/s, '').trim(), modelUsed: model, attachments: generatedAttachments.length > 0 ? generatedAttachments : undefined, reasoningSteps: [...reasoningLog]
                   } : m),
                   updatedAt: Date.now()
                 } : s));
@@ -462,6 +476,7 @@ export default function App() {
             requestBody.max_tokens = maxTokens;
           } else {
             requestBody.messages = apiMessages;
+            requestBody.stream = true;
             if (isO1Model) requestBody.max_completion_tokens = maxTokens;
             else requestBody.max_tokens = maxTokens;
           }
@@ -476,6 +491,7 @@ export default function App() {
           });
 
           const contentType = res.headers.get('content-type');
+          const isEventStream = contentType && contentType.includes('text/event-stream');
           const isJson = contentType && contentType.includes('application/json');
 
           if (!res.ok) {
@@ -489,52 +505,97 @@ export default function App() {
             throw new Error(errorBody ? `${res.status}: ${errorBody.slice(0, 500)}` : `Failed to fetch from provider (${res.status})`);
           }
 
-          if (!isJson) throw new Error('Endpoint returned success but response was not JSON. Please check your Base URL.');
+          if (isEventStream && res.body) {
+             const reader = res.body.getReader();
+             const decoder = new TextDecoder("utf-8");
+             let done = false;
+             let chunkBuffer = '';
 
-          const data = await res.json();
-          console.log('OpenAI-compatible Raw Response:', data);
-          
-          if (isImageModel) {
-            const item = (data.data && data.data[0]) ? data.data[0] : data;
-            let b64 = item.b64_json;
-            let resultUrl = item.url || item.video_url || item.image_url;
-            
-            if (b64 || resultUrl) {
-              let mimeType = 'image/png';
-              let fileExt = 'png';
-              
-              if (!b64 && resultUrl) {
-                const imgRes = await fetch(resultUrl);
-                const blob = await imgRes.blob();
-                mimeType = blob.type || 'image/png';
-                if (mimeType.startsWith('video/')) fileExt = 'mp4';
-                else if (mimeType.includes('jpeg')) fileExt = 'jpg';
-                else if (mimeType.includes('webp')) fileExt = 'webp';
-                
-                const blobToBase64 = (b: Blob): Promise<string> => new Promise((resolve, reject) => {
-                  const reader = new FileReader();
-                  reader.onloadend = () => resolve((reader.result as string).split(',')[1]);
-                  reader.onerror = reject;
-                  reader.readAsDataURL(b);
-                });
-                b64 = await blobToBase64(blob);
-              }
-              if (b64) {
-                generatedAttachments.push({
-                   name: `generated_${Date.now()}.${fileExt}`,
-                   type: mimeType,
-                   data: b64,
-                   isText: false
-                });
-                fullText = ""; 
-              } else throw new Error("Failed to extract media from response (no b64_json found after fetch).");
-            } else throw new Error("Model response did not contain image data (URL or B64). Raw: " + JSON.stringify(data).slice(0, 200));
-          } else if (isLegacyModel) {
-            fullText = data.choices?.[0]?.text || '';
-            finalTokens = data.usage?.completion_tokens || 0;
+             let reasoningLog = [
+               { status: "Connecting to provider...", done: true },
+               { status: "Executing task and analyzing context...", done: false }
+             ];
+
+             while (!done) {
+               const { value, done: readerDone } = await reader.read();
+               done = readerDone;
+               if (value) {
+                 chunkBuffer += decoder.decode(value, { stream: true });
+                 const lines = chunkBuffer.split('\n');
+                 chunkBuffer = lines.pop() || '';
+                 for (const line of lines) {
+                   if (line.startsWith('data: ') && line.trim() !== 'data: [DONE]') {
+                     try {
+                       const data = JSON.parse(line.slice(6));
+                       const delta = data.choices?.[0]?.delta?.content || data.choices?.[0]?.delta?.reasoning_content || '';
+                       if (delta) {
+                         if (data.choices?.[0]?.delta?.reasoning_content) {
+                           // Some models stream reasoning directly
+                           fullText += `<think>${delta}</think>`; // Wrap it to leverage our UI parser
+                         } else {
+                           fullText += delta;
+                         }
+                       }
+                       if (data.usage) finalTokens = data.usage.completion_tokens || data.usage.total_tokens || 0;
+                       
+                       setSessions(prev => prev.map(s => s.id === sessionId ? {
+                          ...s,
+                          messages: s.messages.map(m => m.id === assistantMessageId ? { ...m, content: fullText, reasoningSteps: [...reasoningLog] } : m),
+                          updatedAt: Date.now()
+                       } : s));
+                     } catch(e) {}
+                   }
+                 }
+               }
+             }
           } else {
-            fullText = data.choices?.[0]?.message?.content || '';
-            finalTokens = data.usage?.completion_tokens || data.usage?.total_tokens || 0;
+            if (!isJson) throw new Error('Endpoint returned success but response was not JSON. Please check your Base URL.');
+
+            const data = await res.json();
+            console.log('OpenAI-compatible Raw Response:', data);
+            
+            if (isImageModel) {
+              const item = (data.data && data.data[0]) ? data.data[0] : data;
+              let b64 = item.b64_json;
+              let resultUrl = item.url || item.video_url || item.image_url;
+              
+              if (b64 || resultUrl) {
+                let mimeType = 'image/png';
+                let fileExt = 'png';
+                
+                if (!b64 && resultUrl) {
+                  const imgRes = await fetch(resultUrl);
+                  const blob = await imgRes.blob();
+                  mimeType = blob.type || 'image/png';
+                  if (mimeType.startsWith('video/')) fileExt = 'mp4';
+                  else if (mimeType.includes('jpeg')) fileExt = 'jpg';
+                  else if (mimeType.includes('webp')) fileExt = 'webp';
+                  
+                  const blobToBase64 = (b: Blob): Promise<string> => new Promise((resolve, reject) => {
+                    const reader = new FileReader();
+                    reader.onloadend = () => resolve((reader.result as string).split(',')[1]);
+                    reader.onerror = reject;
+                    reader.readAsDataURL(b);
+                  });
+                  b64 = await blobToBase64(blob);
+                }
+                if (b64) {
+                  generatedAttachments.push({
+                     name: `generated_${Date.now()}.${fileExt}`,
+                     type: mimeType,
+                     data: b64,
+                     isText: false
+                  });
+                  fullText = ""; 
+                } else throw new Error("Failed to extract media from response (no b64_json found after fetch).");
+              } else throw new Error("Model response did not contain image data (URL or B64). Raw: " + JSON.stringify(data).slice(0, 200));
+            } else if (isLegacyModel) {
+              fullText = data.choices?.[0]?.text || '';
+              finalTokens = data.usage?.completion_tokens || 0;
+            } else {
+              fullText = data.choices?.[0]?.message?.content || '';
+              finalTokens = data.usage?.completion_tokens || data.usage?.total_tokens || 0;
+            }
           }
 
           if (fullText.includes('<options>')) {
@@ -565,7 +626,7 @@ export default function App() {
         setSessions(prev => prev.map(s => s.id === sessionId ? {
             ...s,
             messages: s.messages.map(m => m.id === assistantMessageId ? { 
-              ...m, isStreaming: false, tokenCount: finalTokens || undefined, modelUsed: model, responseTime 
+              ...m, isStreaming: false, tokenCount: finalTokens || undefined, modelUsed: model, responseTime, reasoningSteps: m.reasoningSteps ? m.reasoningSteps.map((r: any) => ({ ...r, done: true })) : undefined 
             } : m),
             updatedAt: Date.now()
           } : s));
@@ -1097,7 +1158,8 @@ export default function App() {
         role: 'assistant',
         content: '',
         timestamp: Date.now(),
-        isStreaming: true
+        isStreaming: true,
+        reasoningSteps: [{ status: "Initializing generation sequence...", done: false }]
       };
 
       setSessions(prev => prev.map(s => {
@@ -1615,7 +1677,23 @@ export default function App() {
               </div>
             </div>
           ) : (
-            getActiveSession()?.messages.map((m, idx) => (
+            getActiveSession()?.messages.map((m, idx) => {
+              let displayContent = m.content || '';
+              let reasoningContent = null;
+              if (displayContent.includes('<think>')) {
+                const startIdx = displayContent.indexOf('<think>');
+                const endIdx = displayContent.indexOf('</think>');
+                if (endIdx !== -1) {
+                  reasoningContent = displayContent.substring(startIdx + 7, endIdx).trim();
+                  displayContent = displayContent.substring(0, startIdx) + displayContent.substring(endIdx + 8);
+                } else {
+                  reasoningContent = displayContent.substring(startIdx + 7).trim();
+                  displayContent = displayContent.substring(0, startIdx);
+                }
+                displayContent = displayContent.trim();
+              }
+              
+              return (
               <motion.div 
                 initial={{ opacity: 0, y: 10 }}
                 animate={{ opacity: 1, y: 0 }}
@@ -1635,7 +1713,34 @@ export default function App() {
                     {copiedId === m.id ? <Check size={14} className="text-green-500" /> : <Copy size={14} />}
                   </button>
                   <div className={`markdown-body ${m.role === 'user' ? 'text-[var(--text-app)]' : 'text-[var(--text-app)]'}`}>
-                    {m.role === 'assistant' && m.isStreaming && !m.content ? (
+                    {m.role === 'assistant' && (m.reasoningSteps && m.reasoningSteps.length > 0) && (
+                      <div className="mb-4 text-xs font-mono border border-[var(--border-app)] rounded-lg bg-[var(--bg-app)] overflow-hidden">
+                        <div className="bg-[var(--border-app)]/30 px-3 py-1.5 border-b border-[var(--border-app)] flex items-center gap-2">
+                           {m.isStreaming ? (
+                             <div className="w-2 h-2 rounded-full bg-[var(--accent-app)] animate-pulse" />
+                           ) : (
+                             <Check size={12} className="text-[var(--accent-app)]" />
+                           )}
+                           <span className="text-[var(--text-app)] font-bold tracking-widest uppercase text-[9px]">
+                             {m.isStreaming ? "Backend Reasoning in Progress" : "Backend Execution Log"}
+                           </span>
+                        </div>
+                        <div className="p-3 space-y-2">
+                          {m.reasoningSteps.map((step, i) => (
+                             <div key={i} className="flex items-start gap-2">
+                               {step.done ? <Check size={12} className="text-green-500 mt-0.5 flex-shrink-0" /> : <div className="w-1.5 h-1.5 mt-1.5 flex-shrink-0 rounded-full bg-[var(--accent-app)] animate-ping" />}
+                               <span className={step.done ? 'text-[var(--text-secondary)] line-through opacity-70 break-words' : 'text-[var(--text-app)] font-medium break-words'}>{step.status}</span>
+                             </div>
+                          ))}
+                        </div>
+                        {reasoningContent && (
+                           <div className="p-3 pt-0 text-[10px] text-[var(--text-secondary)] border-t border-[var(--border-app)]/50 bg-[var(--card-app)] leading-relaxed italic opacity-80 whitespace-pre-wrap">
+                             "{reasoningContent}"
+                           </div>
+                        )}
+                      </div>
+                    )}
+                    {m.role === 'assistant' && m.isStreaming && !displayContent && !reasoningContent ? (
                       <div className="flex gap-1.5 items-center py-2 h-6">
                         <motion.div animate={{ opacity: [0.3, 1, 0.3] }} transition={{ repeat: Infinity, duration: 1.4, delay: 0 }} className="w-2 h-2 rounded-full bg-[var(--text-secondary)]" />
                         <motion.div animate={{ opacity: [0.3, 1, 0.3] }} transition={{ repeat: Infinity, duration: 1.4, delay: 0.2 }} className="w-2 h-2 rounded-full bg-[var(--text-secondary)]" />
@@ -1692,7 +1797,7 @@ export default function App() {
                           }
                         }}
                       >
-                        {m.content}
+                        {displayContent}
                       </ReactMarkdown>
                     )}
                   </div>
@@ -1793,7 +1898,7 @@ export default function App() {
                   </div>
                 )}
               </motion.div>
-            ))
+            )})
           )}
           {error && (
             <div className="p-4 bg-red-50 dark:bg-red-950/20 border border-red-200 dark:border-red-900/50 rounded-sm text-red-600 dark:text-red-400 text-sm flex items-center gap-3">
@@ -2315,6 +2420,22 @@ export default function App() {
                 <div className="space-y-6 pt-4 border-t border-[var(--border-app)]">
                   <div className="flex items-center justify-between">
                     <span className="text-[10px] font-semibold uppercase tracking-wider text-[var(--text-secondary)]">Manage Providers</span>
+                    <button 
+                      onClick={() => {
+                        const newProvider: ProviderConfig = {
+                          id: generateId(),
+                          name: 'New Provider',
+                          apiKey: '',
+                          baseUrl: 'https://api.example.com',
+                          enabled: true
+                        };
+                        setSettings(s => ({ ...s, providers: [...s.providers, newProvider] }));
+                      }}
+                      className="text-[9px] font-bold text-[var(--accent-app)] hover:underline uppercase tracking-wide flex items-center gap-1"
+                    >
+                      <Plus size={10} />
+                      Add custom provider
+                    </button>
                   </div>
 
                   {settings.providers.map((provider, idx) => (
@@ -2322,10 +2443,34 @@ export default function App() {
                       <div className="flex items-center justify-between mb-2">
                         <input 
                           value={provider.name}
-                          readOnly
+                          onChange={(e) => {
+                            const newProviders = [...settings.providers];
+                            newProviders[idx].name = e.target.value;
+                            setSettings(s => ({ ...s, providers: newProviders }));
+                          }}
+                          placeholder="Provider Name"
                           className="bg-transparent border-none focus:ring-0 font-bold text-sm text-[var(--accent-app)] p-0 w-2/3"
                         />
                         <div className="flex items-center gap-2">
+                          {settings.providers.length > 1 && (
+                            <button 
+                              onClick={() => {
+                                const newProviders = settings.providers.filter((_, i) => i !== idx);
+                                const newActiveId = settings.activeProviderId === provider.id 
+                                  ? (newProviders[0]?.id || '') 
+                                  : settings.activeProviderId;
+                                setSettings(s => ({ 
+                                  ...s, 
+                                  providers: newProviders,
+                                  activeProviderId: newActiveId
+                                }));
+                              }}
+                              className="opacity-0 group-hover/item:opacity-100 p-1 text-red-500 hover:bg-red-500/10 transition-all"
+                              title="Remove Provider"
+                            >
+                              <Trash2 size={14} />
+                            </button>
+                          )}
                         </div>
                       </div>
                       
