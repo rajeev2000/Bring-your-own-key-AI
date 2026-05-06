@@ -1019,7 +1019,8 @@ export default function App() {
           timestamp: Date.now() + 1,
           clarifyOptions: {
             query: "I found a similar response in your local history. Would you like to reuse it to save tokens?",
-            options: ["Reuse Cached Answer", "Query LLM Anyway"]
+            options: ["Reuse Cached Answer", "Query LLM Anyway"],
+            originalQuery: finalInput
           }
         };
         
@@ -1855,16 +1856,19 @@ export default function App() {
                           {m.clarifyOptions.options.map((opt, i) => (
                             <button
                               key={i}
-                              onClick={() => {
+                              disabled={isSessionLoading(activeSessionId)}
+                              onClick={(e) => {
+                                e.preventDefault();
+                                e.stopPropagation();
                                 if (opt === "Reuse Cached Answer") {
-                                  handleSendMessage(m.content, "true");
+                                  handleSendMessage(m.clarifyOptions?.originalQuery || m.content, "true");
                                 } else if (opt === "Query LLM Anyway") {
-                                  handleSendMessage(m.content);
+                                  handleSendMessage(m.clarifyOptions?.originalQuery || m.content);
                                 } else {
                                   handleSendMessage(opt);
                                 }
                               }}
-                              className="px-4 py-2 bg-[var(--bg-app)] hover:bg-[var(--accent-app)] text-[var(--text-app)] hover:text-[var(--bg-app)] rounded-full transition-all border border-[var(--border-app)] hover:border-[var(--accent-app)] text-xs font-bold shadow-sm"
+                              className={`px-4 py-2 bg-[var(--bg-app)] hover:bg-[var(--accent-app)] text-[var(--text-app)] hover:text-[var(--bg-app)] rounded-full transition-all border border-[var(--border-app)] hover:border-[var(--accent-app)] text-xs font-bold shadow-sm ${isSessionLoading(activeSessionId) ? 'opacity-50 cursor-not-allowed pointer-events-none' : ''}`}
                             >
                               {opt}
                             </button>
@@ -1878,11 +1882,11 @@ export default function App() {
                      <div className="flex items-center gap-2 flex-wrap justify-end">
                         {m.role === 'assistant' && (
                           m.content.includes('```recharts') ? (
-                            <button onClick={() => generateVisualReportForMessage(m)} className="px-3 py-1.5 hover:bg-[var(--border-app)] rounded-lg transition-all text-[var(--accent-app)] font-bold uppercase tracking-widest text-[9px] border border-[var(--accent-app)]/20">
+                            <button disabled={isSessionLoading(activeSessionId)} onClick={(e) => { e.preventDefault(); e.stopPropagation(); generateVisualReportForMessage(m); }} className={`px-3 py-1.5 rounded-lg transition-all font-bold uppercase tracking-widest text-[9px] border ${isSessionLoading(activeSessionId) ? 'opacity-50 cursor-not-allowed pointer-events-none border-[var(--border-app)] text-[var(--text-secondary)]' : 'hover:bg-[var(--border-app)] text-[var(--accent-app)] border-[var(--accent-app)]/20'}`}>
                               Download Chart
                             </button>
                           ) : m.content.includes('|') && m.content.includes('---') ? (
-                            <button onClick={() => exportMessageToExcel(m)} className="px-3 py-1.5 hover:bg-[var(--border-app)] rounded-lg transition-all text-[var(--accent-app)] font-bold uppercase tracking-widest text-[9px] border border-[var(--accent-app)]/20">
+                            <button disabled={isSessionLoading(activeSessionId)} onClick={(e) => { e.preventDefault(); e.stopPropagation(); exportMessageToExcel(m); }} className={`px-3 py-1.5 rounded-lg transition-all font-bold uppercase tracking-widest text-[9px] border ${isSessionLoading(activeSessionId) ? 'opacity-50 cursor-not-allowed pointer-events-none border-[var(--border-app)] text-[var(--text-secondary)]' : 'hover:bg-[var(--border-app)] text-[var(--accent-app)] border-[var(--accent-app)]/20'}`}>
                               Download Excel
                             </button>
                           ) : null

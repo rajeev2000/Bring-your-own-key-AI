@@ -21,6 +21,7 @@ export interface Message {
   clarifyOptions?: {
     query: string;
     options: string[];
+    originalQuery?: string;
   };
 }
 
