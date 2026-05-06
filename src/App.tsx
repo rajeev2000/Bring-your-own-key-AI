@@ -121,7 +121,6 @@ export default function App() {
   const [showStrategy, setShowStrategy] = useState(false);
   const [deferredPrompt, setDeferredPrompt] = useState<any>(null);
   const [fetchedModels, setFetchedModels] = useState<Record<string, { id: string; label: string; category: string }[]>>({});
-  const [pendingOptions, setPendingOptions] = useState<{ query: string; options: string[] } | null>(null);
   const [pendingAttachments, setPendingAttachments] = useState<Attachment[]>([]);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -412,7 +411,11 @@ export default function App() {
               const match = fullText.match(/<options>(.*?)<\/options>/s);
               if (match && match[1]) {
                 try {
-                  setPendingOptions(JSON.parse(match[1]));
+                  const optionsData = JSON.parse(match[1]);
+                  setSessions(prev => prev.map(s => s.id === sessionId ? {
+                      ...s,
+                      messages: s.messages.map(m => m.id === assistantMessageId ? { ...m, clarifyOptions: optionsData } : m)
+                    } : s));
                 } catch(e) {}
               }
             }
@@ -538,8 +541,12 @@ export default function App() {
             const match = fullText.match(/<options>(.*?)<\/options>/s);
             if (match && match[1]) {
               try {
-                setPendingOptions(JSON.parse(match[1]));
+                const optionsData = JSON.parse(match[1]);
                 fullText = fullText.replace(/<options>.*?<\/options>/s, '').trim();
+                setSessions(prev => prev.map(s => s.id === sessionId ? {
+                    ...s,
+                    messages: s.messages.map(m => m.id === assistantMessageId ? { ...m, clarifyOptions: optionsData, content: fullText } : m)
+                  } : s));
               } catch(e) {}
             }
           }
@@ -936,17 +943,35 @@ export default function App() {
     
     NotificationSystem.logActivity();
     
-    setPendingOptions(null);
+    setPendingAttachments([]);
 
     // Cache hit check (only if not an override from a previous choice)
     if (!overrideInput && !useCache) {
       const match = findLocalCacheMatch(finalInput);
       if (match) {
-        setPendingOptions({
-          query: "I found a similar response in your local history. Would you like to reuse it to save tokens?",
-          options: ["Reuse Cached Answer", "Query LLM Anyway"]
+        const sessionId = activeSessionId || generateId();
+        const userMsg: Message = { id: generateId(), role: 'user', content: finalInput, timestamp: Date.now() };
+        const assistantMsg: Message = { 
+          id: generateId(), 
+          role: 'assistant', 
+          content: '',
+          timestamp: Date.now() + 1,
+          clarifyOptions: {
+            query: "I found a similar response in your local history. Would you like to reuse it to save tokens?",
+            options: ["Reuse Cached Answer", "Query LLM Anyway"]
+          }
+        };
+        
+        setSessions(prev => {
+          const session = prev.find(s => s.id === sessionId);
+          if (session) {
+            return prev.map(s => s.id === sessionId ? { ...s, messages: [...s.messages, userMsg, assistantMsg], updatedAt: Date.now() } : s);
+          }
+          const title = finalInput.slice(0, 40).trim() + (finalInput.length > 40 ? '...' : '');
+          return [...prev, { id: sessionId, title: title, messages: [userMsg, assistantMsg], createdAt: Date.now(), updatedAt: Date.now(), studyMode: false }];
         });
-        // We'll handle the choice in the next call
+        setActiveSessionId(sessionId);
+        setInput('');
         return;
       }
     }
@@ -1003,7 +1028,6 @@ export default function App() {
         timestamp: Date.now(),
         attachments: pendingAttachments.length > 0 ? [...pendingAttachments] : undefined
       };
-      setPendingAttachments([]);
 
       let updatedSessions = [...sessions];
       
@@ -1044,7 +1068,6 @@ export default function App() {
       const currentSession = updatedSessions.find(s => s.id === sessionId)!;
       const profile = currentSession.profileId ? settings.profiles?.find(p => p.id === currentSession.profileId) : null;
       const model = profile?.defaultModel || settings.model || DEFAULT_MODEL;
-      const isGemini = provider.baseUrl.includes('generative');
 
       let sysInstruction = "";
       
@@ -1068,12 +1091,7 @@ export default function App() {
         sysInstruction += `\n\nBACKGROUND MEMORY: Below is context from past restored sessions for your reference:\n${settings.chatMemory}\n`;
       }
 
-      const startTime = Date.now();
-      let fullText = '';
-      let finalTokens = 0;
-      let generatedAttachments: any[] = [];
       const assistantMessageId = generateId();
-
       const assistantMessage: Message = {
         id: assistantMessageId,
         role: 'assistant',
@@ -1508,59 +1526,6 @@ export default function App() {
         )}
       </AnimatePresence>
 
-      {/* Ambiguity Resolution Modal */}
-      <AnimatePresence>
-        {pendingOptions && (
-          <div className="fixed inset-0 z-[200] flex items-center justify-center p-4 sm:p-6 bg-black/80 backdrop-blur-sm">
-            <motion.div 
-              initial={{ opacity: 0, scale: 0.9, y: 20 }}
-              animate={{ opacity: 1, scale: 1, y: 0 }}
-              exit={{ opacity: 0, scale: 0.9, y: 20 }}
-              className="bg-[var(--card-app)] border border-[var(--border-app)] rounded-2xl p-8 sm:p-10 shadow-xl max-w-lg w-full relative overflow-hidden"
-            >
-              <div className="absolute top-0 left-0 w-full h-1 bg-gradient-to-r from-transparent via-[var(--accent-app)] to-transparent opacity-50" />
-              
-              <div className="flex items-center gap-3 mb-6">
-                <div className="w-2 h-2 rounded-full bg-[var(--accent-app)] animate-ping" />
-                <h3 className="text-[10px] font-bold text-[var(--accent-app)] uppercase tracking-widest">System Clarification Required</h3>
-              </div>
-
-              <p className="text-xl sm:text-2xl font-bold text-[var(--text-app)] mb-8 tracking-tight leading-tight">
-                {pendingOptions.query}
-              </p>
-
-              <div className="flex flex-col gap-3">
-                {pendingOptions.options.map((opt, i) => (
-                  <button
-                    key={i}
-                    onClick={() => {
-                      if (opt === "Reuse Cached Answer") {
-                        handleSendMessage(undefined, "true");
-                      } else if (opt === "Query LLM Anyway") {
-                        handleSendMessage(input);
-                      } else {
-                        handleSendMessage(opt);
-                      }
-                    }}
-                    className="group flex items-center justify-between px-6 py-4 bg-[var(--card-app)] hover:bg-[var(--accent-app)] text-[var(--text-app)] hover:text-[var(--bg-app)] rounded-[20px] transition-all border border-[var(--border-app)] hover:border-[var(--accent-app)] text-left"
-                  >
-                    <span className="font-bold text-sm tracking-wide">{opt}</span>
-                    <ChevronRight size={18} className="opacity-0 group-hover:opacity-100 transition-all -translate-x-2 group-hover:translate-x-0" />
-                  </button>
-                ))}
-              </div>
-
-              <button
-                onClick={() => setPendingOptions(null)}
-                className="mt-8 w-full py-3 text-[var(--text-secondary)] text-[10px] font-semibold uppercase tracking-wider hover:text-[var(--text-app)] transition-all"
-              >
-                Dismiss Sequence
-              </button>
-            </motion.div>
-          </div>
-        )}
-      </AnimatePresence>
-
       {/* Main Content */}
       <div className="relative flex-1 flex flex-col min-w-0 bg-[var(--bg-app)]">
         <AnimatePresence />
@@ -1650,7 +1615,7 @@ export default function App() {
               </div>
             </div>
           ) : (
-            getActiveSession()?.messages.filter(m => !m.isStreaming).map((m, idx) => (
+            getActiveSession()?.messages.map((m, idx) => (
               <motion.div 
                 initial={{ opacity: 0, y: 10 }}
                 animate={{ opacity: 1, y: 0 }}
@@ -1670,58 +1635,66 @@ export default function App() {
                     {copiedId === m.id ? <Check size={14} className="text-green-500" /> : <Copy size={14} />}
                   </button>
                   <div className={`markdown-body ${m.role === 'user' ? 'text-[var(--text-app)]' : 'text-[var(--text-app)]'}`}>
-                    <ReactMarkdown 
-                      remarkPlugins={[remarkGfm]}
-                      components={{
-                        code({node, inline, className, children, ...props}: any) {
-                          const match = /language-(\w+)/.exec(className || '')
-                          const lang = match ? match[1] : '';
-                          if (!inline && lang === 'recharts') {
-                            try {
-                              const config = JSON.parse(String(children).replace(/\n$/, ''));
-                              const ChartType = config.type === 'line' ? LineChart 
-                                              : config.type === 'pie' ? PieChart 
-                                              : config.type === 'area' ? AreaChart
-                                              : BarChart;
-                              const DataComponent: any = config.type === 'line' ? Line 
-                                              : config.type === 'pie' ? Pie 
-                                              : config.type === 'area' ? Area
-                                              : Bar;
-                              
-                              return (
-                                <div className="my-6 p-4 bg-[var(--card-app)] border border-[var(--border-app)] rounded-xl shadow-sm h-[350px]">
-                                  <div className="mb-2 text-center text-xs font-bold text-[var(--accent-app)] uppercase tracking-widest">{config.title || "Visualised Report"}</div>
-                                  <ResponsiveContainer width="100%" height="100%">
-                                    <ChartType data={config.data}>
-                                      <CartesianGrid strokeDasharray="3 3" stroke="#222" />
-                                      <XAxis dataKey={config.xAxisKey} stroke="#888" fontSize={12} tickLine={false} axisLine={false} />
-                                      <YAxis stroke="#888" fontSize={12} tickLine={false} axisLine={false} />
-                                      <RechartsTooltip contentStyle={{ backgroundColor: 'var(--card-app)', borderColor: 'var(--border-app)', color: 'var(--text-app)', borderRadius: '8px' }} />
-                                      <Legend wrapperStyle={{ fontSize: '12px', paddingTop: '10px' }} />
-                                      {config.series.map((s: any, i: number) => (
-                                        <DataComponent 
-                                          key={i} 
-                                          type="monotone" 
-                                          dataKey={s.key} 
-                                          stroke={s.color || "var(--accent-app)"} 
-                                          fill={s.color || "var(--accent-app)"} 
-                                          strokeWidth={2}
-                                        />
-                                      ))}
-                                    </ChartType>
-                                  </ResponsiveContainer>
-                                </div>
-                              );
-                            } catch (e) {
-                              return <div className="text-red-500 text-xs my-4 p-4 border border-red-500/30 rounded bg-red-500/10">Failed to render chart: Invalid JSON configuration</div>;
+                    {m.role === 'assistant' && m.isStreaming && !m.content ? (
+                      <div className="flex gap-1.5 items-center py-2 h-6">
+                        <motion.div animate={{ opacity: [0.3, 1, 0.3] }} transition={{ repeat: Infinity, duration: 1.4, delay: 0 }} className="w-2 h-2 rounded-full bg-[var(--text-secondary)]" />
+                        <motion.div animate={{ opacity: [0.3, 1, 0.3] }} transition={{ repeat: Infinity, duration: 1.4, delay: 0.2 }} className="w-2 h-2 rounded-full bg-[var(--text-secondary)]" />
+                        <motion.div animate={{ opacity: [0.3, 1, 0.3] }} transition={{ repeat: Infinity, duration: 1.4, delay: 0.4 }} className="w-2 h-2 rounded-full bg-[var(--text-secondary)]" />
+                      </div>
+                    ) : (
+                      <ReactMarkdown 
+                        remarkPlugins={[remarkGfm]}
+                        components={{
+                          code({node, inline, className, children, ...props}: any) {
+                            const match = /language-(\w+)/.exec(className || '')
+                            const lang = match ? match[1] : '';
+                            if (!inline && lang === 'recharts') {
+                              try {
+                                const config = JSON.parse(String(children).replace(/\n$/, ''));
+                                const ChartType = config.type === 'line' ? LineChart 
+                                                : config.type === 'pie' ? PieChart 
+                                                : config.type === 'area' ? AreaChart
+                                                : BarChart;
+                                const DataComponent: any = config.type === 'line' ? Line 
+                                                : config.type === 'pie' ? Pie 
+                                                : config.type === 'area' ? Area
+                                                : Bar;
+                                
+                                return (
+                                  <div className="my-6 p-4 bg-[var(--card-app)] border border-[var(--border-app)] rounded-xl shadow-sm h-[350px]">
+                                    <div className="mb-2 text-center text-xs font-bold text-[var(--accent-app)] uppercase tracking-widest">{config.title || "Visualised Report"}</div>
+                                    <ResponsiveContainer width="100%" height="100%">
+                                      <ChartType data={config.data}>
+                                        <CartesianGrid strokeDasharray="3 3" stroke="#222" />
+                                        <XAxis dataKey={config.xAxisKey} stroke="#888" fontSize={12} tickLine={false} axisLine={false} />
+                                        <YAxis stroke="#888" fontSize={12} tickLine={false} axisLine={false} />
+                                        <RechartsTooltip contentStyle={{ backgroundColor: 'var(--card-app)', borderColor: 'var(--border-app)', color: 'var(--text-app)', borderRadius: '8px' }} />
+                                        <Legend wrapperStyle={{ fontSize: '12px', paddingTop: '10px' }} />
+                                        {config.series.map((s: any, i: number) => (
+                                          <DataComponent 
+                                            key={i} 
+                                            type="monotone" 
+                                            dataKey={s.key} 
+                                            stroke={s.color || "var(--accent-app)"} 
+                                            fill={s.color || "var(--accent-app)"} 
+                                            strokeWidth={2}
+                                          />
+                                        ))}
+                                      </ChartType>
+                                    </ResponsiveContainer>
+                                  </div>
+                                );
+                              } catch (e) {
+                                return <div className="text-red-500 text-xs my-4 p-4 border border-red-500/30 rounded bg-red-500/10">Failed to render chart: Invalid JSON configuration</div>;
+                              }
                             }
+                            return <code className={className} {...props}>{children}</code>
                           }
-                          return <code className={className} {...props}>{children}</code>
-                        }
-                      }}
-                    >
-                      {m.content}
-                    </ReactMarkdown>
+                        }}
+                      >
+                        {m.content}
+                      </ReactMarkdown>
+                    )}
                   </div>
                   
                   {m.attachments && m.attachments.length > 0 && (
@@ -1770,6 +1743,31 @@ export default function App() {
                     </div>
                   )}
 
+                  {m.clarifyOptions && (
+                    <div className="mt-4 flex flex-col gap-2 w-full">
+                       <p className="text-xs font-bold text-[var(--accent-app)] uppercase tracking-widest mb-1">{m.clarifyOptions.query}</p>
+                       <div className="flex flex-wrap gap-2">
+                          {m.clarifyOptions.options.map((opt, i) => (
+                            <button
+                              key={i}
+                              onClick={() => {
+                                if (opt === "Reuse Cached Answer") {
+                                  handleSendMessage(m.content, "true");
+                                } else if (opt === "Query LLM Anyway") {
+                                  handleSendMessage(m.content);
+                                } else {
+                                  handleSendMessage(opt);
+                                }
+                              }}
+                              className="px-4 py-2 bg-[var(--bg-app)] hover:bg-[var(--accent-app)] text-[var(--text-app)] hover:text-[var(--bg-app)] rounded-full transition-all border border-[var(--border-app)] hover:border-[var(--accent-app)] text-xs font-bold shadow-sm"
+                            >
+                              {opt}
+                            </button>
+                          ))}
+                       </div>
+                    </div>
+                  )}
+
                    <div className={`flex flex-wrap items-center justify-between gap-y-2 mt-5 text-[11px] ${m.role === 'user' ? 'text-[var(--text-app)]/60' : 'text-[var(--text-secondary)]'}`}>
                      <span className="font-mono tracking-widest whitespace-nowrap">{new Date(m.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
                      <div className="flex items-center gap-2 flex-wrap justify-end">
@@ -1796,19 +1794,6 @@ export default function App() {
                 )}
               </motion.div>
             ))
-          )}
-          {isSessionLoading(activeSessionId) && (
-            <motion.div 
-               initial={{ opacity: 0 }}
-               animate={{ opacity: 1 }}
-               className="flex justify-start px-2 py-4 h-12 items-center"
-            >
-              <div className="flex gap-1.5 items-center">
-                <motion.div animate={{ opacity: [0.3, 1, 0.3] }} transition={{ repeat: Infinity, duration: 1.4, delay: 0 }} className="w-2 h-2 rounded-full bg-[var(--text-secondary)]" />
-                <motion.div animate={{ opacity: [0.3, 1, 0.3] }} transition={{ repeat: Infinity, duration: 1.4, delay: 0.2 }} className="w-2 h-2 rounded-full bg-[var(--text-secondary)]" />
-                <motion.div animate={{ opacity: [0.3, 1, 0.3] }} transition={{ repeat: Infinity, duration: 1.4, delay: 0.4 }} className="w-2 h-2 rounded-full bg-[var(--text-secondary)]" />
-              </div>
-            </motion.div>
           )}
           {error && (
             <div className="p-4 bg-red-50 dark:bg-red-950/20 border border-red-200 dark:border-red-900/50 rounded-sm text-red-600 dark:text-red-400 text-sm flex items-center gap-3">

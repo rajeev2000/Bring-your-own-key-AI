@@ -17,6 +17,10 @@ export interface Message {
   attachments?: Attachment[];
   isStreaming?: boolean;
   audioUrl?: string;
+  clarifyOptions?: {
+    query: string;
+    options: string[];
+  };
 }
 
 export interface AIProfile {
