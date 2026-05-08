@@ -42,6 +42,7 @@ export default function Layout() {
             <Link to="/features" className="hover:text-[var(--accent-app)] hover:underline flex items-center gap-1"><Star size={14} /> Features</Link>
             <Link to="/compare" className="hover:text-[var(--accent-app)] hover:underline flex items-center gap-1"><Columns size={14} /> Compare</Link>
             <Link to="/pricing" className="hover:text-[var(--accent-app)] hover:underline flex items-center gap-1"><Lock size={14} /> Pricing</Link>
+            <Link to="/news" className="hover:text-[var(--accent-app)] hover:underline flex items-center gap-1"><FileText size={14} /> News</Link>
             <Link to="/docs" className="hover:text-[var(--accent-app)] hover:underline flex items-center gap-1"><FileText size={14} /> Docs</Link>
             <Link to="/trust-center" className="hover:text-[var(--accent-app)] hover:underline flex items-center gap-1"><Shield size={14} /> Trust Center</Link>
           </nav>
@@ -68,6 +69,7 @@ export default function Layout() {
             <ul className="space-y-2 text-sm">
               <li><Link to="/features" className="hover:text-[var(--accent-app)] transition-colors">Features</Link></li>
               <li><Link to="/compare" className="hover:text-[var(--accent-app)] transition-colors">Compare</Link></li>
+              <li><Link to="/news" className="hover:text-[var(--accent-app)] transition-colors">AI News</Link></li>
               <li><Link to="/pricing" className="hover:text-[var(--accent-app)] transition-colors">Pricing</Link></li>
               <li><Link to="/app" className="hover:text-[var(--accent-app)] transition-colors">App</Link></li>
             </ul>

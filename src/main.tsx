@@ -9,6 +9,7 @@ import Compare from './pages/Compare.tsx';
 import Features from './pages/Features.tsx';
 import Pricing from './pages/Pricing.tsx';
 import Docs from './pages/Docs.tsx';
+import News from './pages/News.tsx';
 import TrustCenter from './pages/TrustCenter.tsx';
 import Blog from './pages/Blog.tsx';
 import Legal from './pages/Legal.tsx';
@@ -25,6 +26,7 @@ createRoot(document.getElementById('root')!).render(
             <Route path="/features" element={<Features />} />
             <Route path="/pricing" element={<Pricing />} />
             <Route path="/docs" element={<Docs />} />
+            <Route path="/news" element={<News />} />
             <Route path="/trust-center" element={<TrustCenter />} />
             <Route path="/blog" element={<Blog />} />
             <Route path="/legal" element={<Legal />} />
