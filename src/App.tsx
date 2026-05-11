@@ -104,6 +104,13 @@ const PREDEFINED_MODELS: Record<string, { id: string; label: string; category: s
   ]
 };
 
+// In-memory queue for background jobs to avoid localStorage quota issues with large media
+let memoryJobsQueue: any[] = [];
+try {
+  memoryJobsQueue = JSON.parse(localStorage.getItem('iluv_jobs') || '[]');
+  localStorage.removeItem('iluv_jobs'); // clear it out safely
+} catch(e) {}
+
 export default function App() {
   // --- State ---
   const [sessions, setSessions] = useState<ChatSession[]>([]);
@@ -268,12 +275,7 @@ export default function App() {
     const workerInterval = setInterval(async () => {
       if (processingJobRef.current) return;
 
-      let jobs: any[] = [];
-      try {
-        jobs = JSON.parse(localStorage.getItem('iluv_jobs') || '[]');
-      } catch (e) {
-        return;
-      }
+      let jobs: any[] = [...memoryJobsQueue];
 
       const now = Date.now();
       // Retry stuck jobs after 2 minutes
@@ -284,16 +286,16 @@ export default function App() {
         return j;
       });
 
+      memoryJobsQueue = jobs;
+
       const job: any = jobs.find(j => j.status === 'pending');
       if (!job) {
-        localStorage.setItem('iluv_jobs', JSON.stringify(jobs));
         return;
       }
 
       processingJobRef.current = true;
       job.status = 'processing';
       job.lastAttempt = now;
-      localStorage.setItem('iluv_jobs', JSON.stringify(jobs));
 
       setLoadingSessions(prev => new Set(prev).add(job.sessionId));
 
@@ -629,23 +631,21 @@ export default function App() {
           } : s));
 
         // Delete successful job
-        const updatedJobs = JSON.parse(localStorage.getItem('iluv_jobs') || '[]').filter((j: any) => j.id !== job.id);
-        localStorage.setItem('iluv_jobs', JSON.stringify(updatedJobs));
+        memoryJobsQueue = memoryJobsQueue.filter((j: any) => j.id !== job.id);
 
         NotificationSystem.sendSuccessNotification("iluv Task Complete", `The response for "${history[history.length - 1]?.content?.slice(0, 30) || 'your prompt'}..." is ready.`);
 
       } catch (err: any) {
         console.error("Job failed:", err);
         apiConnectionManager.resetConnection(job.provider);
-        const currentJobs = JSON.parse(localStorage.getItem('iluv_jobs') || '[]');
-        const idx = currentJobs.findIndex((j: any) => j.id === job.id);
+        const idx = memoryJobsQueue.findIndex((j: any) => j.id === job.id);
         if (idx !== -1) {
-          currentJobs[idx].status = 'pending';
-          currentJobs[idx].retries = (currentJobs[idx].retries || 0) + 1;
+          memoryJobsQueue[idx].status = 'pending';
+          memoryJobsQueue[idx].retries = (memoryJobsQueue[idx].retries || 0) + 1;
           
-          if (currentJobs[idx].retries > 3) {
+          if (memoryJobsQueue[idx].retries > 3) {
             // Hard fail, discard job
-            currentJobs.splice(idx, 1);
+            memoryJobsQueue.splice(idx, 1);
             setSessions(prev => prev.map(s => s.id === job.sessionId ? {
               ...s,
               messages: s.messages.map(m => m.id === job.id ? { 
@@ -653,7 +653,6 @@ export default function App() {
               } : m)
             } : s));
           }
-          localStorage.setItem('iluv_jobs', JSON.stringify(currentJobs));
         }
       } finally {
         setLoadingSessions(prev => {
@@ -1181,11 +1180,9 @@ export default function App() {
       };
 
       try {
-        const jobs = JSON.parse(localStorage.getItem('iluv_jobs') || '[]');
-        jobs.push(job);
-        localStorage.setItem('iluv_jobs', JSON.stringify(jobs));
+        memoryJobsQueue.push(job);
       } catch(err) {
-        throw new Error("Failed to queue background task (localStorage full?). Please clear data.");
+        throw new Error("Failed to queue background task.");
       }
 
     } catch (err: any) {

@@ -244,8 +244,9 @@ export default function App() {
            const content = await FileSystem.readAsStringAsync(asset.uri, { encoding: 'utf8' });
            setAttachments(prev => [...prev, { ...newAtt, isText: true, content }]);
         } else {
-           const base64 = await FileSystem.readAsStringAsync(asset.uri, { encoding: 'base64' });
-           setAttachments(prev => [...prev, { ...newAtt, isText: false, data: base64 }]);
+           // Store the file URI locally instead of keeping the full base64 string in state
+           // This prevents the state and AsyncStorage from bloating and crashing
+           setAttachments(prev => [...prev, { ...newAtt, isText: false, uri: asset.uri }]);
         }
       }
     } catch (e) {
@@ -340,27 +341,33 @@ export default function App() {
           };
           setSessions(prev => prev.map(s => s.id === sessionId ? { ...s, messages: [...s.messages, aiMessage], updatedAt: Date.now() } : s));
         } else {
-          const contents = currentSession.messages.map(m => {
+          const contents = await Promise.all(currentSession.messages.map(async m => {
             const parts: any[] = [{ text: m.content || '' }];
             if (m.attachments) {
-              m.attachments.forEach(att => {
+              for (const att of m.attachments) {
                 if (att.isText) {
                   parts.push({ text: `\n[FILE: ${att.name}]\n${att.content}\n[END FILE]` });
                 } else {
-                  parts.push({
-                    inlineData: {
-                      data: att.data,
-                      mimeType: att.type
-                    }
-                  });
+                  let base64Data = att.data;
+                  if (!base64Data && att.uri) {
+                     base64Data = await FileSystem.readAsStringAsync(att.uri, { encoding: 'base64' });
+                  }
+                  if (base64Data) {
+                    parts.push({
+                      inlineData: {
+                        data: base64Data,
+                        mimeType: att.type
+                      }
+                    });
+                  }
                 }
-              });
+              }
             }
             return {
               role: m.role === 'assistant' ? 'model' : m.role,
               parts
             };
-          });
+          }));
 
           const response = await ai.models.generateContent({
             model: model,
@@ -372,16 +379,24 @@ export default function App() {
           const usageCount = response.usageMetadata?.candidatesTokenCount || 0;
           
           const generatedAttachments: any[] = [];
-          parts.forEach(p => {
+          await Promise.all(parts.map(async p => {
              if (p.inlineData?.data) {
+                let pUri = undefined;
+                try {
+                   if (FileSystem.cacheDirectory) {
+                     const filename = `generated_${Date.now()}_${Math.random().toString(36).substring(7)}.png`;
+                     pUri = `${FileSystem.cacheDirectory}${filename}`;
+                     await FileSystem.writeAsStringAsync(pUri, p.inlineData.data, { encoding: 'base64' });
+                   }
+                } catch(e) {}
                 generatedAttachments.push({
                    name: `generated_${Date.now()}.png`,
                    type: p.inlineData.mimeType || 'image/png',
-                   data: p.inlineData.data,
+                   uri: pUri,
                    isText: false
                 });
              }
-          });
+          }));
 
           const aiMessage: Message = {
             id: generateId(),
@@ -500,11 +515,14 @@ export default function App() {
     }
   };
 
-  const downloadImage = async (base64Data: string, filename: string) => {
+  const downloadImage = async (dataOrUri: string, filename: string) => {
     try {
       if (!FileSystem.cacheDirectory) throw new Error("Cache dir missing");
-      const uri = `${FileSystem.cacheDirectory}${filename}`;
-      await FileSystem.writeAsStringAsync(uri, base64Data, { encoding: FileSystem.EncodingType.Base64 });
+      let uri = dataOrUri;
+      if (!dataOrUri.startsWith('file://')) {
+          uri = `${FileSystem.cacheDirectory}${filename}`;
+          await FileSystem.writeAsStringAsync(uri, dataOrUri, { encoding: FileSystem.EncodingType.Base64 });
+      }
       if (await Sharing.isAvailableAsync()) {
         await Sharing.shareAsync(uri);
       } else {
@@ -594,12 +612,12 @@ export default function App() {
                         {att.type.startsWith('image/') ? (
                           <StyledView>
                             <Image 
-                              source={{ uri: `data:${att.type};base64,${att.data}` }} 
+                              source={{ uri: att.uri || `data:${att.type};base64,${att.data}` }} 
                               style={{ width: 250, height: 250, borderRadius: 12, borderWidth: 1, borderColor: '#3b82f655' }} 
                               resizeMode="cover"
                             />
                             <StyledTouchableOpacity 
-                              onPress={() => downloadImage(att.data as string, att.name)}
+                              onPress={() => downloadImage(att.data as string || att.uri || '', att.name)}
                               className="absolute bottom-2 right-2 bg-black/50 p-2 rounded-full border border-[#3b82f6] backdrop-blur-sm"
                             >
                               <Download size={18} color="white" />

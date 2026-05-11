@@ -2,6 +2,7 @@ export interface Attachment {
   name: string;
   type: string;
   data?: string; // base64 for binaries
+  uri?: string;  // local file system uri
   isText?: boolean;
   content?: string; // raw text for text files
 }
