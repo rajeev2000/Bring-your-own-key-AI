@@ -38,7 +38,8 @@ import {
   GraduationCap,
   BookOpen,
   Menu,
-  SquarePen
+  SquarePen,
+  LayoutTemplate
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import ReactMarkdown from 'react-markdown';
@@ -48,7 +49,7 @@ import * as XLSX from 'xlsx';
 import { Document, Packer, Paragraph, TextRun } from 'docx';
 import { LineChart, Line, BarChart, Bar, PieChart, Pie, AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip as RechartsTooltip, Legend, ResponsiveContainer } from 'recharts';
 
-import { Message, ChatSession, AppSettings, DEFAULT_MODEL, DEFAULT_BASE_URL, Attachment, AIProfile, ProviderConfig } from './types';
+import { Message, ChatSession, AppSettings, PromptTemplate, DEFAULT_MODEL, DEFAULT_BASE_URL, Attachment, AIProfile, ProviderConfig } from './types';
 import { NotificationSystem } from './lib/NotificationSystem';
 import { apiConnectionManager } from './lib/ConnectionManager';
 
@@ -120,7 +121,9 @@ export default function App() {
   const [error, setError] = useState<string | null>(null);
   const [showSettings, setShowSettings] = useState(false);
   const [showProfilesList, setShowProfilesList] = useState(false);
+  const [showTemplates, setShowTemplates] = useState(false);
   const [editingProfile, setEditingProfile] = useState<Partial<AIProfile> | null>(null);
+  const [editingTemplate, setEditingTemplate] = useState<Partial<PromptTemplate> | null>(null);
   const [activeProfileId, setActiveProfileId] = useState<string | null>(null);
   const [showManageSessions, setShowManageSessions] = useState(false);
   const [selectedSessionIds, setSelectedSessionIds] = useState<Set<string>>(new Set());
@@ -1156,7 +1159,7 @@ export default function App() {
         sysInstruction = "You are a highly efficient AI assistant focused on 100% accuracy and direct utility. \n\nCORE PROTOCOLS:\n1. DIRECTNESS: Provide the requested answer immediately. Skip all introductory phrases, 'luxury' descriptors (elite, bespoke, etc.), and concluding summaries unless they contain essential data.\n2. CLARIFICATION: If a request is broad, ambiguous, or lacks specific parameters (e.g., format, scope, target audience), you MUST pause and ask clarifying questions. Use the <options> format to provide 3-5 distinct paths for the user to choose from to ensure a correct result.\n3. FORMATTING: Wrap clarify options in: <options>{\"query\": \"Clarifying Question?\", \"options\": [\"Option A\", \"Option B\"]}</options>. Use GFM tables for data.\n4. CONCISENESS: Keep explanations minimal and strictly technical unless 'detailed explanation' is requested.";
       
         if (currentSession.studyMode) {
-          sysInstruction = "You are a patient and structured Study Assistant. Your goal is to guide the user towards understanding using educational best practices.\n\nSTUDY MODE PROTOCOLS:\n1. STRUCTURE: You MUST always output a structured response with clear Markdown headings for: 'Concept Explanation', 'Step-by-Step Breakdown', 'Guided Learning', and 'Analogy' (if applicable).\n2. AVOID NORMAL CHAT: Do NOT reply with a standard conversational response. ALWAYS use the structured format described above for every response.\n3. CONCEPT EXPLANATION: Briefly explain the underlying 'why' behind the topic or answer.\n4. STEP-BY-STEP: Break down complex problems into logical, numbered steps.\n5. GUIDED LEARNING: Do not just give the final answer; show the thought process clearly.\n6. TONE: Maintain an encouraging, academic, yet clear and accessible tone.\n7. CLARIFICATION & FORMATTING: Keep the standard <options> and GFM table tools available for layout.";
+          sysInstruction = "You are a Guided Learning AI, essentially a patient and structured human tutor. Your goal is to help the user learn by guiding them step-by-step.\n\nGUIDED LEARNING PROTOCOLS:\n1. ONE AT A TIME: Ask ONLY ONE question or prompt at a time to check understanding.\n2. HINTS FIRST: Provide hints instead of direct answers initially when the user is stuck.\n3. ADAPTIVE: Adapt your explanations closely based on the user's responses.\n4. BREAK IT DOWN: Break complex topics into small, manageable steps.\n5. STEP-BY-STEP: Allow step-by-step explanation on demand.\n6. TONE: Maintain an encouraging, patient, and educational tone.\n7. CONCISE: Keep your messages brief and conversational. Avoid walls of text.";
         }
       }
 
@@ -1586,6 +1589,13 @@ export default function App() {
                 <span>AI Profiles</span>
               </button>
               <button 
+                onClick={() => setShowTemplates(true)}
+                className="flex items-center justify-center gap-2 p-2.5 rounded-none hover:bg-[var(--border-app)] transition-colors text-[11px] font-black uppercase tracking-widest text-[var(--text-app)] w-full mb-1"
+              >
+                <LayoutTemplate size={16} />
+                <span>Templates</span>
+              </button>
+              <button 
                 onClick={() => setShowSettings(true)}
                 className="flex items-center justify-center gap-2 p-2.5 rounded-none hover:bg-[var(--border-app)] transition-colors text-[11px] font-black uppercase tracking-widest text-[var(--text-app)] w-full"
               >
@@ -1638,6 +1648,16 @@ export default function App() {
           </div>
           
           <div className="flex-1 flex justify-end gap-2">
+            {activeSessionId && (
+              <button 
+                onClick={() => toggleStudyMode(activeSessionId)}
+                className={`flex justify-center items-center gap-2 px-3 py-1.5 rounded-full text-[10px] sm:text-xs font-bold transition-all border ${getActiveSession()?.studyMode ? 'bg-[var(--accent-app)] text-[var(--bg-app)] border-transparent' : 'bg-[var(--card-app)] text-[var(--text-secondary)] border-[var(--border-app)] hover:border-[var(--text-secondary)]'}`}
+                title={getActiveSession()?.studyMode ? "Guided Learning Mode: ON" : "Guided Learning Mode: OFF"}
+              >
+                <BookOpen size={16} />
+                <span className="hidden sm:inline uppercase tracking-widest">{getActiveSession()?.studyMode ? "Learning" : "Default"}</span>
+              </button>
+            )}
             <button 
               onClick={() => createNewSession(activeProfileId || undefined)}
               className="p-2 hover:bg-[var(--border-app)] rounded-full transition-colors text-[var(--text-app)]"
@@ -1710,14 +1730,18 @@ export default function App() {
                 key={m.id}
                 className={`flex flex-col w-full ${m.role === 'user' ? 'items-end' : 'items-start'}`}
               >
-                <div className={`max-w-[90%] sm:max-w-[80%] group relative ${
-                  m.role === 'user' 
-                    ? 'bg-[var(--border-app)] text-[var(--text-app)] rounded-2xl rounded-tr-md px-6 py-5 shadow-sm' 
-                    : 'bg-[var(--card-app)] border border-[var(--border-app)] rounded-2xl rounded-tl-md px-7 py-6 shadow-sm'
+                <div className={`group relative ${
+                  getActiveSession()?.studyMode 
+                    ? (m.role === 'user' 
+                        ? 'max-w-[85%] bg-[var(--border-app)]/80 text-[var(--text-app)] rounded-3xl rounded-br-sm px-5 py-3 sm:px-6 sm:py-4 shadow-none text-[15px] leading-relaxed' 
+                        : 'max-w-full bg-transparent text-[var(--text-app)] px-2 py-4 shadow-none text-[15px] leading-relaxed w-full')
+                    : `max-w-[90%] sm:max-w-[80%] ${m.role === 'user' 
+                        ? 'bg-[var(--border-app)] text-[var(--text-app)] rounded-2xl rounded-tr-md px-6 py-5 shadow-sm' 
+                        : 'bg-[var(--card-app)] border border-[var(--border-app)] rounded-2xl rounded-tl-md px-7 py-6 shadow-sm'}`
                 }`}>
                   <button 
                     onClick={() => copyToClipboard(m.content, m.id)}
-                    className={`absolute top-4 ${m.role === 'user' ? 'left-4' : 'right-4'} p-2 rounded-lg opacity-0 group-hover:opacity-100 transition-all text-[var(--text-secondary)] hover:text-[var(--accent-app)] hover:bg-black/5`}
+                    className={`absolute ${getActiveSession()?.studyMode && m.role !== 'user' ? 'top-4 right-0' : 'top-4 ' + (m.role === 'user' ? 'left-4' : 'right-4')} p-2 rounded-lg opacity-0 group-hover:opacity-100 transition-all text-[var(--text-secondary)] hover:text-[var(--accent-app)] hover:bg-black/5`}
                     title="Copy text"
                   >
                     {copiedId === m.id ? <Check size={14} className="text-green-500" /> : <Copy size={14} />}
@@ -2084,7 +2108,7 @@ export default function App() {
                       handleSendMessage();
                     }
                   }}
-                  placeholder="Ask iluv"
+                  placeholder={getActiveSession()?.studyMode ? "Message Tutor..." : "Ask iluv"}
                   rows={1}
                   className="flex-1 max-h-48 sm:max-h-64 bg-transparent border-none focus:ring-0 text-[var(--text-app)] placeholder-[var(--text-secondary)] resize-none py-3 scroll-hide font-normal text-base sm:text-lg leading-relaxed outline-none"
                 />
@@ -2696,6 +2720,184 @@ export default function App() {
                 </button>
               </div>
 
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
+      {/* Prompt Templates Modal */}
+      <AnimatePresence>
+        {showTemplates && !editingTemplate && (
+          <div className="fixed inset-0 z-[60] flex items-center justify-center p-4">
+            <motion.div 
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              onClick={() => setShowTemplates(false)}
+              className="absolute inset-0 bg-black/60 backdrop-blur-sm"
+            />
+            <motion.div 
+              initial={{ opacity: 0, scale: 0.95, y: 10 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.95, y: 10 }}
+              className="relative w-full max-w-2xl bg-[var(--bg-app)] border border-[var(--border-app)] rounded-2xl shadow-2xl overflow-hidden flex flex-col max-h-[85vh]"
+            >
+              <div className="p-6 border-b border-[var(--border-app)] flex justify-between items-center bg-[var(--card-app)]">
+                <div>
+                  <h2 className="text-xl font-medium tracking-tight">Prompt Templates</h2>
+                  <p className="text-sm text-[var(--text-secondary)] mt-1">Save and reuse your prompts.</p>
+                </div>
+                <button 
+                  onClick={() => setShowTemplates(false)}
+                  className="p-2 hover:bg-[var(--border-app)] rounded-full transition-colors"
+                >
+                  <X size={20} />
+                </button>
+              </div>
+
+              <div className="p-6 overflow-y-auto custom-scrollbar flex-1 space-y-4">
+                {(!settings.promptTemplates || settings.promptTemplates.length === 0) ? (
+                   <div className="text-center text-[var(--text-secondary)] py-8 font-medium">No templates saved yet.</div>
+                ) : (
+                  settings.promptTemplates.map(template => (
+                    <div 
+                      key={template.id}
+                      className="group p-4 border border-[var(--border-app)] hover:border-[var(--text-secondary)] bg-[var(--card-app)] rounded-xl transition-all"
+                    >
+                      <div className="flex items-center justify-between mb-2">
+                        <h3 className="font-medium text-[var(--text-app)] text-lg line-clamp-1">{template.title}</h3>
+                        <div className="flex items-center gap-2">
+                          <button 
+                            onClick={() => copyToClipboard(template.content, template.id)}
+                            className="p-2 text-[var(--text-secondary)] hover:text-[var(--accent-app)] hover:bg-[var(--accent-app)]/10 rounded-lg transition-colors"
+                            title="Copy Template"
+                          >
+                            {copiedId === template.id ? <Check size={18} className="text-green-500" /> : <Copy size={18} />}
+                          </button>
+                          <button 
+                            onClick={() => setEditingTemplate(template)}
+                            className="p-2 text-[var(--text-secondary)] hover:text-[var(--text-app)] hover:bg-[var(--border-app)] rounded-lg transition-colors"
+                            title="Edit Template"
+                          >
+                            <SquarePen size={18} />
+                          </button>
+                          <button 
+                            onClick={(e) => {
+                              e.stopPropagation(); 
+                              if(confirm('Are you sure you want to delete this template?')) {
+                                setSettings(s => ({ ...s, promptTemplates: s.promptTemplates?.filter(t => t.id !== template.id) }));
+                              }
+                            }}
+                            className="p-2 text-red-500 hover:bg-red-500/10 rounded-lg transition-colors"
+                            title="Delete Template"
+                          >
+                            <Trash2 size={18} />
+                          </button>
+                        </div>
+                      </div>
+                      <p className="text-sm text-[var(--text-secondary)] line-clamp-2">{template.content}</p>
+                    </div>
+                  ))
+                )}
+              </div>
+
+              <div className="p-6 border-t border-[var(--border-app)] bg-[var(--card-app)] flex justify-end">
+                <button 
+                  onClick={() => setEditingTemplate({ id: generateId(), title: '', content: '' })}
+                  className="px-6 py-3 bg-[var(--text-app)] text-[var(--bg-app)] font-medium rounded-lg hover:opacity-90 transition-opacity flex items-center gap-2"
+                >
+                  <Plus size={18} />
+                  New Template
+                </button>
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
+      {/* Edit Template Modal */}
+      <AnimatePresence>
+        {editingTemplate && (
+          <div className="fixed inset-0 z-[70] flex items-center justify-center p-4">
+            <motion.div 
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              className="absolute inset-0 bg-black/60 backdrop-blur-sm"
+              onClick={() => setEditingTemplate(null)}
+            />
+            <motion.div 
+              initial={{ opacity: 0, scale: 0.95, y: 10 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.95, y: 10 }}
+              className="relative w-full max-w-3xl bg-[var(--card-app)] border border-[var(--border-app)] rounded-2xl shadow-2xl overflow-hidden flex flex-col max-h-[90vh]"
+            >
+              <div className="p-6 border-b border-[var(--border-app)] flex justify-between items-center bg-[var(--bg-app)]">
+                <h2 className="text-xl font-medium tracking-tight">
+                  {settings.promptTemplates?.some(t => t.id === editingTemplate.id) ? 'Edit Template' : 'New Template'}
+                </h2>
+                <button 
+                  onClick={() => setEditingTemplate(null)}
+                  className="p-2 hover:bg-[var(--border-app)] rounded-full transition-colors"
+                >
+                  <X size={20} />
+                </button>
+              </div>
+
+              <div className="p-6 overflow-y-auto custom-scrollbar flex-1 space-y-6">
+                <div>
+                   <label className="block text-sm font-medium text-[var(--text-secondary)] mb-1">Title</label>
+                   <input 
+                     type="text" 
+                     value={editingTemplate.title || ''}
+                     onChange={(e) => setEditingTemplate({...editingTemplate, title: e.target.value})}
+                     placeholder="e.g., Code Review Expert"
+                     className="w-full bg-[var(--bg-app)] border border-[var(--border-app)] rounded-lg p-3 text-[var(--text-app)] focus:border-[var(--accent-app)] focus:ring-1 focus:ring-[var(--accent-app)] outline-none transition-all placeholder:opacity-40"
+                   />
+                </div>
+                
+                <div>
+                  <label className="block text-sm font-medium text-[var(--text-secondary)] mb-1">Prompt Content</label>
+                  <textarea 
+                    value={editingTemplate.content || ''}
+                    onChange={(e) => setEditingTemplate({...editingTemplate, content: e.target.value})}
+                    placeholder="Enter the template content here..."
+                    rows={8}
+                    className="w-full bg-[var(--bg-app)] border border-[var(--border-app)] rounded-lg p-3 text-[var(--text-app)] focus:border-[var(--accent-app)] focus:ring-1 focus:ring-[var(--accent-app)] outline-none transition-all placeholder:opacity-40 custom-scrollbar resize-y"
+                  />
+                </div>
+              </div>
+
+              <div className="p-6 border-t border-[var(--border-app)] bg-[var(--bg-app)] flex justify-end gap-3">
+                <button 
+                  onClick={() => setEditingTemplate(null)}
+                  className="px-6 py-2.5 bg-[var(--card-app)] border border-[var(--border-app)] text-[var(--text-app)] font-medium rounded-lg hover:bg-[var(--border-app)] transition-colors"
+                >
+                  Cancel
+                </button>
+                <button 
+                  onClick={() => {
+                    if (!editingTemplate.title || !editingTemplate.content) {
+                      alert('Please provide both title and content for the template.');
+                      return;
+                    }
+                    setSettings(s => {
+                      const existing = s.promptTemplates || [];
+                      const isUpdate = existing.some(t => t.id === editingTemplate.id);
+                      return {
+                        ...s,
+                        promptTemplates: isUpdate 
+                          ? existing.map(t => t.id === editingTemplate.id ? editingTemplate as PromptTemplate : t)
+                          : [...existing, editingTemplate as PromptTemplate]
+                      };
+                    });
+                    setEditingTemplate(null);
+                  }}
+                  className="px-6 py-2.5 bg-[var(--text-app)] text-[var(--bg-app)] font-medium rounded-lg hover:opacity-90 transition-opacity"
+                >
+                  Save Template
+                </button>
+              </div>
             </motion.div>
           </div>
         )}

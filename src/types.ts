@@ -58,6 +58,12 @@ export interface ProviderConfig {
   enabled: boolean;
 }
 
+export interface PromptTemplate {
+  id: string;
+  title: string;
+  content: string;
+}
+
 export interface AppSettings {
   providers: ProviderConfig[];
   activeProviderId?: string;
@@ -67,6 +73,7 @@ export interface AppSettings {
   themePreset?: 'dark' | 'light';
   chatMemory?: string;
   profiles?: AIProfile[];
+  promptTemplates?: PromptTemplate[];
 }
 
 export const DEFAULT_MODEL = 'gemini-3-flash-preview';
