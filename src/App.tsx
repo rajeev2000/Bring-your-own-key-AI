@@ -444,14 +444,37 @@ export default function App() {
           const apiMessages = [
             { role: 'system', content: sysInstruction },
             ...history.map((m: any) => {
-              let content = m.content;
-              if (m.attachments) {
+              if (m.attachments && m.attachments.some((a: any) => !a.isText && a.data && a.type.startsWith('image/'))) {
+                const contentParts: any[] = [];
+                let textContent = m.content || '';
                 m.attachments.forEach((att: any) => {
-                  if (att.isText) content += `\n[FILE: ${att.name}]\n${att.content}\n[END FILE]`;
-                  else if (att.data) content += `\n[${att.type.startsWith('image/') ? 'IMAGE' : 'FILE'} ATTACHED: ${att.name}]`;
+                  if (att.isText) {
+                    textContent += `\n[FILE: ${att.name}]\n${att.content}\n[END FILE]`;
+                  } else if (att.data && att.type.startsWith('image/')) {
+                    contentParts.push({
+                      type: 'image_url',
+                      image_url: { url: `data:${att.type};base64,${att.data}` }
+                    });
+                  } else if (att.data) {
+                    textContent += `\n[FILE ATTACHED: ${att.name}]`;
+                  }
                 });
+                if (textContent) {
+                  contentParts.unshift({ type: 'text', text: textContent });
+                } else if (contentParts.length === 0) {
+                  contentParts.push({ type: 'text', text: m.content || '' });
+                }
+                return { role: m.role, content: contentParts };
+              } else {
+                let content = m.content || '';
+                if (m.attachments) {
+                  m.attachments.forEach((att: any) => {
+                    if (att.isText) content += `\n[FILE: ${att.name}]\n${att.content}\n[END FILE]`;
+                    else if (att.data) content += `\n[${att.type.startsWith('image/') ? 'IMAGE' : 'FILE'} ATTACHED: ${att.name}]`;
+                  });
+                }
+                return { role: m.role, content };
               }
-              return { role: m.role, content };
             })
           ];
 
