@@ -134,10 +134,19 @@ EXPERTISE:
 - Western Astrology, Natal/Birth Charts, Zodiac Psychology, Palmistry, Planetary Aspects, Houses, Ascendant/Rising Signs, Moon Signs, Panchanga, Muhurtha Selection, Planetary Dignities, Human personality analysis.
 
 ASTROLOGY KNOWLEDGE MODEL:
-THE THREE PILLARS METHOD: Zodiac Signs, Celestial Bodies, Houses.
-Explain using Elements (Fire, Earth, Air, Water) and Modalities (Cardinal, Fixed, Mutable).
-Understand Sun sign, Moon sign, Ascendant, planetary placements, aspects (conjunction, sextile, square, trine, opposition), domicile, exaltation, detriment, fall.
-Interpret holistic charts and NEVER reduce someone to just their sun sign.
+THE THREE PILLARS METHOD:
+1. Zodiac Signs: Understand dates, elements, modalities, ruling planets, personality strengths/weaknesses.
+   - Elements: Fire (passionate/action), Earth (grounded/practical), Air (intellectual/communicative), Water (emotional/intuitive).
+   - Modalities: Cardinal (initiates), Fixed (stabilizes), Mutable (adapts).
+   - Signs: Aries, Taurus, Gemini, Cancer, Leo, Virgo, Libra, Scorpio, Sagittarius, Capricorn, Aquarius, Pisces.
+2. Celestial Bodies / Planets: Sun, Moon, Mercury, Venus, Mars, Jupiter, Saturn, Uranus, Neptune, Pluto, Chiron, North Node, Midheaven, Ascendant. Understand planetary rulerships, psychological impact, sign + planet interaction.
+3. Houses: 1st (identity), 2nd (money/possessions), 3rd (communication), 4th (home/roots), 5th (creativity/romance), 6th (work/health), 7th (partnerships), 8th (transformation), 9th (philosophy/travel), 10th (career/reputation), 11th (friendships/groups), 12th (subconscious/spirituality).
+
+ASPECTS & PLACEMENTS:
+- Ascendant/Rising: First impression, social mask, external energy. Needs accurate birth time.
+- Moon Sign: Emotional patterns, inner world, comfort mechanisms, intuition.
+- Aspects: Conjunction, Sextile, Square, Trine, Opposition. Explain tension, harmony, growth areas.
+- Interpret holistic charts safely and psychosocially. NEVER reduce someone strictly to their sun sign.
 
 PALMISTRY KNOWLEDGE:
 Passive hand = inherited traits. Active hand = current self.
@@ -159,6 +168,22 @@ CONVERSATION STYLE:
 
 Example tone:
 "Greetings. I’m Ben. 🌙\n\nYour chart shows a strong Saturn influence, which often creates a disciplined and resilient personality. Yet your Moon placement suggests there is also a deeply sensitive emotional world beneath that composed exterior. You are likely someone who carries responsibility naturally, but your soul also seeks meaning beyond achievement."`
+};
+
+const ProfileIcon = ({ icon, className = "", imgClassName = "" }: { icon?: string, className?: string, imgClassName?: string }) => {
+  const isImage = icon && (icon.startsWith('http') || icon.startsWith('data:') || icon.startsWith('/'));
+  if (isImage) {
+    return (
+      <div className={`overflow-hidden flex items-center justify-center shrink-0 ${className}`}>
+        <img src={icon} alt="Profile Icon" className={`w-full h-full object-cover ${imgClassName}`} referrerPolicy="no-referrer" />
+      </div>
+    );
+  }
+  return (
+    <div className={`flex items-center justify-center shrink-0 ${className}`}>
+      {icon || '🤖'}
+    </div>
+  );
 };
 
 export default function App() {
@@ -708,7 +733,7 @@ export default function App() {
         // Delete successful job
         memoryJobsQueue = memoryJobsQueue.filter((j: any) => j.id !== job.id);
 
-        NotificationSystem.sendSuccessNotification("Ben Task Complete", `The response for "${history[history.length - 1]?.content?.slice(0, 30) || 'your prompt'}..." is ready.`);
+        NotificationSystem.sendSuccessNotification("iluv Task Complete", `The response for "${history[history.length - 1]?.content?.slice(0, 30) || 'your prompt'}..." is ready.`);
 
       } catch (err: any) {
         console.error("Job failed:", err);
@@ -853,12 +878,12 @@ export default function App() {
     // Apply theme
     const THEMES: Record<string, Record<string, string>> = {
       dark: {
-        '--bg-app': '#050510',
-        '--text-app': '#fdfdfd',
-        '--accent-app': '#d4af37',
-        '--border-app': '#1a1a3a',
-        '--card-app': '#0d0d1f',
-        '--text-secondary': '#9ba1a6',
+        '--bg-app': '#000000',
+        '--text-app': '#ffffff',
+        '--accent-app': '#d4d4d8',
+        '--border-app': '#27272a',
+        '--card-app': '#09090b',
+        '--text-secondary': '#a1a1aa',
         'color-scheme': 'dark'
       },
       light: {
@@ -1193,7 +1218,7 @@ export default function App() {
         if (profile.tone) sysInstruction += `\n\nTONE PREFERENCE: ${profile.tone}`;
         if (profile.memory) sysInstruction += `\n\PROFILE MEMORY/NOTES:\n${profile.memory}`;
       } else {
-        sysInstruction = BEN_PROFILE.instructions;
+        sysInstruction = "You are a highly efficient AI assistant focused on 100% accuracy and direct utility. \n\nCORE PROTOCOLS:\n1. DIRECTNESS: Provide the requested answer immediately. Skip all introductory phrases, 'luxury' descriptors (elite, bespoke, etc.), and concluding summaries unless they contain essential data.\n2. CLARIFICATION: If a request is broad, ambiguous, or lacks specific parameters (e.g., format, scope, target audience), you MUST pause and ask clarifying questions. Use the <options> format to provide 3-5 distinct paths for the user to choose from to ensure a correct result.\n3. FORMATTING: Wrap clarify options in: <options>{\"query\": \"Clarifying Question?\", \"options\": [\"Option A\", \"Option B\"]}</options>. Use GFM tables for data.\n4. CONCISENESS: Keep explanations minimal and strictly technical unless 'detailed explanation' is requested.";
       }
 
       if (settings.maxOutputTokens !== undefined && settings.maxOutputTokens > 0) {
@@ -1267,14 +1292,14 @@ export default function App() {
     const ws = XLSX.utils.json_to_sheet(data);
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, ws, "Message");
-    XLSX.writeFile(wb, `Ben_Response_${message.id}.xlsx`);
+    XLSX.writeFile(wb, `iluv_Response_${message.id}.xlsx`);
   };
 
   const exportMessageToWord = async (message: Message) => {
     const children = [
       new Paragraph({
         children: [
-          new TextRun({ text: `Ben Response: ${new Date(message.timestamp).toLocaleString()}`, bold: true, size: 32 })
+          new TextRun({ text: `iluv Response: ${new Date(message.timestamp).toLocaleString()}`, bold: true, size: 32 })
         ]
       }),
       new Paragraph({ text: "" }) 
@@ -1298,7 +1323,7 @@ export default function App() {
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = `Ben_Response_${message.id}.docx`;
+    a.download = `iluv_Response_${message.id}.docx`;
     a.click();
     URL.revokeObjectURL(url);
   };
@@ -1524,7 +1549,7 @@ export default function App() {
                 <div className="w-9 h-9 rounded-sm bg-[var(--accent-app)] flex items-center justify-center text-[var(--bg-app)] shadow-sm">
                   <Sparkles size={22} />
                 </div>
-                <span className="tracking-[0.2em]">BEN</span>
+                <span className="tracking-[0.2em]">iluv</span>
               </div>
               <button 
                 onClick={() => setSidebarOpen(false)}
@@ -1557,7 +1582,7 @@ export default function App() {
                 >
                   <div className={`flex items-center justify-center w-6 h-6 shrink-0 ${activeSessionId === s.id ? 'text-[var(--accent-app)]' : 'text-[var(--text-app)] opacity-60'}`}>
                     {s.profileId && settings.profiles?.find(p => p.id === s.profileId) ? (
-                      <span className="text-lg leading-none">{settings.profiles.find(p => p.id === s.profileId)!.icon || '🤖'}</span>
+                      <ProfileIcon icon={settings.profiles.find(p => p.id === s.profileId)!.icon} className="text-lg leading-none w-5 h-5 rounded-sm" />
                     ) : (
                       <MessageSquare size={18} />
                     )}
@@ -1667,11 +1692,11 @@ export default function App() {
             <h1 className="text-xl font-medium tracking-tight text-[var(--text-app)] flex items-center gap-2">
                {activeSessionId && getActiveSession()?.profileId ? (
                  <>
-                   <span>{settings.profiles?.find(p => p.id === getActiveSession()?.profileId)?.icon || '🤖'}</span>
-                   {settings.profiles?.find(p => p.id === getActiveSession()?.profileId)?.name || 'Ben'}
+                   <ProfileIcon icon={settings.profiles?.find(p => p.id === getActiveSession()?.profileId)?.icon} className="w-8 h-8 rounded-full" />
+                   {settings.profiles?.find(p => p.id === getActiveSession()?.profileId)?.name || 'iluv'}
                  </>
                ) : (
-                 'Ben'
+                 'iluv'
                )}
              </h1>
              {activeSessionId && getActiveSession()?.profileId && (
@@ -2085,7 +2110,7 @@ export default function App() {
                       handleSendMessage();
                     }
                   }}
-                  placeholder="Ask Ben..."
+                  placeholder="Ask iluv"
                   rows={1}
                   className="flex-1 max-h-48 sm:max-h-64 bg-transparent border-none focus:ring-0 text-[var(--text-app)] placeholder-[var(--text-secondary)] resize-none py-3 scroll-hide font-normal text-base sm:text-lg leading-relaxed outline-none"
                 />
@@ -2186,8 +2211,8 @@ export default function App() {
                         setShowProfilesList(false); 
                       }}
                     >
-                      <div className="w-12 h-12 rounded-full border border-[var(--border-app)] flex items-center justify-center text-[var(--text-app)] text-xl bg-[var(--bg-app)]">
-                        {profile.icon || '🤖'}
+                      <div className="w-12 h-12 rounded-full border border-[var(--border-app)] flex items-center justify-center text-[var(--bg-app)] text-xl bg-[var(--text-app)] bg-opacity-10 overflow-hidden">
+                        <ProfileIcon icon={profile.icon} className="w-full h-full text-[var(--text-app)]" />
                       </div>
                       <div>
                         <h3 className="font-medium text-[var(--text-app)] text-lg">{profile.name}</h3>
@@ -2280,14 +2305,14 @@ export default function App() {
                        className="w-full bg-[var(--bg-app)] border border-[var(--border-app)] rounded-lg p-3 text-[var(--text-app)] focus:border-[var(--accent-app)] focus:ring-1 focus:ring-[var(--accent-app)] outline-none transition-all placeholder:opacity-40"
                      />
                   </div>
-                  <div className="w-24">
-                     <label className="block text-sm font-medium text-[var(--text-secondary)] mb-1">Emoji Icon</label>
+                  <div className="w-full sm:w-1/3">
+                     <label className="block text-sm font-medium text-[var(--text-secondary)] mb-1">Emoji or Image URL</label>
                      <input 
                        type="text"
                        value={editingProfile.icon || ''}
                        onChange={e => setEditingProfile(p => ({ ...p!, icon: e.target.value }))}
-                       placeholder="🤖"
-                       className="w-full bg-[var(--bg-app)] border border-[var(--border-app)] rounded-lg p-3 text-[var(--text-app)] focus:border-[var(--accent-app)] focus:ring-1 focus:ring-[var(--accent-app)] outline-none transition-all text-center text-xl"
+                       placeholder="🤖 or https://..."
+                       className="w-full bg-[var(--bg-app)] border border-[var(--border-app)] rounded-lg p-3 text-[var(--text-app)] focus:border-[var(--accent-app)] focus:ring-1 focus:ring-[var(--accent-app)] outline-none transition-all placeholder:text-[var(--text-secondary)]"
                      />
                   </div>
                 </div>
