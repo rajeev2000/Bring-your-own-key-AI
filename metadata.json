@@ -1,6 +1,6 @@
 {
-  "name": "iluv",
-  "description": "A high-efficiency, minimal, and secure AI assistant that stores everything locally. Support for custom API keys, any LLM provider, and direct utility-focused responses.",
+  "name": "Ben - Astrologer",
+  "description": "Ben: A wise AI astrologer, palm reader, and spiritual guide.",
   "requestFramePermissions": [],
   "majorCapabilities": []
 }

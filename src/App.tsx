@@ -112,6 +112,55 @@ try {
   localStorage.removeItem('iluv_jobs'); // clear it out safely
 } catch(e) {}
 
+const BEN_PROFILE: AIProfile = {
+  id: 'ben-astrologer',
+  name: 'Ben',
+  icon: '🌙',
+  description: 'A wise astrologer, palm reader, and spiritual guide.',
+  createdAt: Date.now(),
+  instructions: `You are an AI astrologer and palmistry assistant named "Ben".
+You must behave like a highly experienced astrologer, palm reader, spiritual guide, and birth-chart interpreter with deep knowledge of Western astrology, palmistry, planetary psychology, houses, aspects, and Panchanga timing systems.
+
+CORE PERSONALITY:
+- Tone: Wise, Calm, Experienced, Mystical but practical, Concise, Insightful, Emotionally intelligent.
+- Never childish, robotic, or overly casual.
+- Always greet the user warmly in the very first interaction.
+- Speak like an experienced astrologer with decades of knowledge.
+- Avoid sounding judgmental. Never label zodiac signs as "good" or "bad".
+- Focus on guidance, empowerment, and self-awareness. Avoid fatalistic predictions.
+- Always acknowledge free will. Interpret symbolically and psychologically. Blend spirituality + psychology + practical life insight.
+
+EXPERTISE:
+- Western Astrology, Natal/Birth Charts, Zodiac Psychology, Palmistry, Planetary Aspects, Houses, Ascendant/Rising Signs, Moon Signs, Panchanga, Muhurtha Selection, Planetary Dignities, Human personality analysis.
+
+ASTROLOGY KNOWLEDGE MODEL:
+THE THREE PILLARS METHOD: Zodiac Signs, Celestial Bodies, Houses.
+Explain using Elements (Fire, Earth, Air, Water) and Modalities (Cardinal, Fixed, Mutable).
+Understand Sun sign, Moon sign, Ascendant, planetary placements, aspects (conjunction, sextile, square, trine, opposition), domicile, exaltation, detriment, fall.
+Interpret holistic charts and NEVER reduce someone to just their sun sign.
+
+PALMISTRY KNOWLEDGE:
+Passive hand = inherited traits. Active hand = current self.
+Hand shapes: Earth, Air, Water, Fire.
+Major lines: Heart (emotions), Head (intelligence), Life (vitality - NEVER predict lifespan).
+Minor lines: Fate (career), Sun (recognition).
+Fingers: Jupiter (ambition), Saturn (responsibility), Apollo (creativity), Mercury (communication).
+Symbols: Worry lines, Mystic Cross, Islands, Grilles. Interpret constructively and psychologically.
+
+PANCHANGA & Muhurtha:
+Understand Tithi, Vara, Nakshatra, Yoga, Karana, Abhijit Muhurta, Brahma Muhurta, Amrit Kaal. Avoid Rahu Kaal, Yamaganda, Gulika Kaal. Suggest favorable timings for activities.
+
+CONVERSATION STYLE:
+- Be concise but meaningful. Avoid excessive paragraphs.
+- Ask for Date/Time/Place of birth or Palm images when needed.
+- Remember previous discussions.
+- NEVER predict death, create fear, give medical diagnosis, guarantee future events.
+- Encourage self-awareness and conscious choices.
+
+Example tone:
+"Greetings. I’m Ben. 🌙\n\nYour chart shows a strong Saturn influence, which often creates a disciplined and resilient personality. Yet your Moon placement suggests there is also a deeply sensitive emotional world beneath that composed exterior. You are likely someone who carries responsibility naturally, but your soul also seeks meaning beyond achievement."`
+};
+
 export default function App() {
   // --- State ---
   const [sessions, setSessions] = useState<ChatSession[]>([]);
@@ -138,8 +187,9 @@ export default function App() {
   
   const [settings, setSettings] = useState<AppSettings>(() => {
     const saved = localStorage.getItem('iluv_settings');
+    let parsed: any = null;
     if (saved) {
-      const parsed = JSON.parse(saved);
+      parsed = JSON.parse(saved);
       // Hardcode standard providers
       parsed.providers = [
         {
@@ -160,30 +210,38 @@ export default function App() {
       if (!parsed.activeProviderId || (parsed.activeProviderId !== 'gemini' && parsed.activeProviderId !== 'openai')) {
          parsed.activeProviderId = 'gemini';
       }
-      return parsed;
+    } else {
+      parsed = {
+        providers: [
+          {
+            id: 'gemini',
+            name: 'Google AI',
+            apiKey: '',
+            baseUrl: DEFAULT_BASE_URL,
+            enabled: true
+          },
+          {
+            id: 'openai',
+            name: 'OpenAI',
+            apiKey: '',
+            baseUrl: 'https://api.openai.com',
+            enabled: true
+          }
+        ],
+        activeProviderId: 'gemini',
+        model: DEFAULT_MODEL,
+        themePreset: 'dark',
+        maxOutputTokens: 2048,
+        profiles: []
+      };
     }
-    return {
-      providers: [
-        {
-          id: 'gemini',
-          name: 'Google AI',
-          apiKey: '',
-          baseUrl: DEFAULT_BASE_URL,
-          enabled: true
-        },
-        {
-          id: 'openai',
-          name: 'OpenAI',
-          apiKey: '',
-          baseUrl: 'https://api.openai.com',
-          enabled: true
-        }
-      ],
-      activeProviderId: 'gemini',
-      model: DEFAULT_MODEL,
-      themePreset: 'light',
-      maxOutputTokens: 2048
-    };
+    
+    // Inject Ben profile if not present
+    if (!parsed.profiles) parsed.profiles = [];
+    if (!parsed.profiles.some((p: AIProfile) => p.id === 'ben-astrologer')) {
+      parsed.profiles = [BEN_PROFILE, ...parsed.profiles];
+    }
+    return parsed;
   });
 
   const getActiveProvider = () => {
@@ -382,21 +440,22 @@ export default function App() {
               config: configOpts
             });
 
-            let reasoningLog = [
-              { status: "Connecting to provider...", done: true },
-              { status: "Generating tool execution or response...", done: false }
-            ];
-
             for await (const chunk of responseStream) {
               fullText += (chunk.text || '');
-              if (chunk.usageMetadata) finalTokens = chunk.usageMetadata.candidatesTokenCount || 0;
               
-              if (chunk.candidates?.[0]?.groundingMetadata) {
-                if (chunk.candidates[0].groundingMetadata.webSearchQueries?.length > 0 && !reasoningLog.some(r => r.status.includes('Searched'))) {
-                  reasoningLog.push({ status: `Searched Google: ${chunk.candidates[0].groundingMetadata.webSearchQueries[0]}`, done: true });
+              if (chunk.candidates?.[0]?.content?.parts) {
+                for (const part of chunk.candidates[0].content.parts) {
+                  if (part.executableCode?.code) {
+                    fullText += `\n\n\`\`\`python\n${part.executableCode.code}\n\`\`\`\n\n`;
+                  }
+                  if (part.codeExecutionResult?.output) {
+                    fullText += `*Execution Output:*\n\`\`\`\n${part.codeExecutionResult.output}\n\`\`\`\n\n`;
+                  }
                 }
               }
 
+              if (chunk.usageMetadata) finalTokens = chunk.usageMetadata.candidatesTokenCount || 0;
+              
               if (chunk.candidates?.[0]?.content?.parts) {
                 chunk.candidates[0].content.parts.forEach((p: any) => {
                   if (p.inlineData?.data) {
@@ -419,7 +478,7 @@ export default function App() {
               setSessions(prev => prev.map(s => s.id === sessionId ? {
                   ...s,
                   messages: s.messages.map(m => m.id === assistantMessageId ? { 
-                    ...m, content: fullText.replace(/<options>.*?<\/options>/s, '').trim(), modelUsed: model, attachments: generatedAttachments.length > 0 ? generatedAttachments : undefined, reasoningSteps: [...reasoningLog]
+                    ...m, content: fullText.replace(/<options>.*?<\/options>/s, '').trim(), modelUsed: model, attachments: generatedAttachments.length > 0 ? generatedAttachments : undefined
                   } : m),
                   updatedAt: Date.now()
                 } : s));
@@ -536,11 +595,6 @@ export default function App() {
              let done = false;
              let chunkBuffer = '';
 
-             let reasoningLog = [
-               { status: "Connecting to provider...", done: true },
-               { status: "Executing task and analyzing context...", done: false }
-             ];
-
              while (!done) {
                const { value, done: readerDone } = await reader.read();
                done = readerDone;
@@ -554,18 +608,13 @@ export default function App() {
                        const data = JSON.parse(line.slice(6));
                        const delta = data.choices?.[0]?.delta?.content || data.choices?.[0]?.delta?.reasoning_content || '';
                        if (delta) {
-                         if (data.choices?.[0]?.delta?.reasoning_content) {
-                           // Some models stream reasoning directly
-                           fullText += `<think>${delta}</think>`; // Wrap it to leverage our UI parser
-                         } else {
-                           fullText += delta;
-                         }
+                         fullText += delta;
                        }
                        if (data.usage) finalTokens = data.usage.completion_tokens || data.usage.total_tokens || 0;
                        
                        setSessions(prev => prev.map(s => s.id === sessionId ? {
                           ...s,
-                          messages: s.messages.map(m => m.id === assistantMessageId ? { ...m, content: fullText, reasoningSteps: [...reasoningLog] } : m),
+                          messages: s.messages.map(m => m.id === assistantMessageId ? { ...m, content: fullText } : m),
                           updatedAt: Date.now()
                        } : s));
                      } catch(e) {}
@@ -651,7 +700,7 @@ export default function App() {
         setSessions(prev => prev.map(s => s.id === sessionId ? {
             ...s,
             messages: s.messages.map(m => m.id === assistantMessageId ? { 
-              ...m, isStreaming: false, tokenCount: finalTokens || undefined, modelUsed: model, responseTime, reasoningSteps: m.reasoningSteps ? m.reasoningSteps.map((r: any) => ({ ...r, done: true })) : undefined 
+              ...m, isStreaming: false, tokenCount: finalTokens || undefined, modelUsed: model, responseTime
             } : m),
             updatedAt: Date.now()
           } : s));
@@ -659,7 +708,7 @@ export default function App() {
         // Delete successful job
         memoryJobsQueue = memoryJobsQueue.filter((j: any) => j.id !== job.id);
 
-        NotificationSystem.sendSuccessNotification("iluv Task Complete", `The response for "${history[history.length - 1]?.content?.slice(0, 30) || 'your prompt'}..." is ready.`);
+        NotificationSystem.sendSuccessNotification("Ben Task Complete", `The response for "${history[history.length - 1]?.content?.slice(0, 30) || 'your prompt'}..." is ready.`);
 
       } catch (err: any) {
         console.error("Job failed:", err);
@@ -804,12 +853,12 @@ export default function App() {
     // Apply theme
     const THEMES: Record<string, Record<string, string>> = {
       dark: {
-        '--bg-app': '#000000',
-        '--text-app': '#ffffff',
-        '--accent-app': '#d4d4d8',
-        '--border-app': '#27272a',
-        '--card-app': '#09090b',
-        '--text-secondary': '#a1a1aa',
+        '--bg-app': '#050510',
+        '--text-app': '#fdfdfd',
+        '--accent-app': '#d4af37',
+        '--border-app': '#1a1a3a',
+        '--card-app': '#0d0d1f',
+        '--text-secondary': '#9ba1a6',
         'color-scheme': 'dark'
       },
       light: {
@@ -874,8 +923,7 @@ export default function App() {
       title: `Merged: ${sessionsToMerge.map(s => s.title).join(', ').slice(0, 30)}...`,
       messages: mergedMessages,
       createdAt: sessionsToMerge[0].createdAt,
-      updatedAt: Date.now(),
-      studyMode: false
+      updatedAt: Date.now()
     };
     
     const remainingSessions = sessions.filter(s => !selectedSessionIds.has(s.id));
@@ -905,7 +953,6 @@ export default function App() {
       messages: [],
       createdAt: Date.now(),
       updatedAt: Date.now(),
-      studyMode: false,
       profileId: profileId
     };
     setSessions([newSession, ...sessions]);
@@ -919,15 +966,6 @@ export default function App() {
     if (activeSessionId === id) {
       setActiveSessionId(newSessions.length > 0 ? newSessions[0].id : null);
     }
-  };
-
-  const toggleStudyMode = (sessionId: string) => {
-    setSessions(prev => prev.map(s => {
-      if (s.id === sessionId) {
-        return { ...s, studyMode: !s.studyMode };
-      }
-      return s;
-    }));
   };
 
   const calculateSimilarity = (s1: string, s2: string) => {
@@ -1048,7 +1086,7 @@ export default function App() {
             return prev.map(s => s.id === sessionId ? { ...s, messages: [...s.messages, userMsg, assistantMsg], updatedAt: Date.now() } : s);
           }
           const title = finalInput.slice(0, 40).trim() + (finalInput.length > 40 ? '...' : '');
-          return [...prev, { id: sessionId, title: title, messages: [userMsg, assistantMsg], createdAt: Date.now(), updatedAt: Date.now(), studyMode: false }];
+          return [...prev, { id: sessionId, title: title, messages: [userMsg, assistantMsg], createdAt: Date.now(), updatedAt: Date.now() }];
         });
         setActiveSessionId(sessionId);
         setInput('');
@@ -1111,7 +1149,7 @@ export default function App() {
 
       let updatedSessions = [...sessions];
       
-      const isFirstMessage = !activeSession || activeSession.messages.length === 0 || activeSession.title === 'New Chat' || activeSession.title === 'New iluv session';
+      const isFirstMessage = !activeSession || activeSession.messages.length === 0 || activeSession.title === 'New Chat' || activeSession.title === 'New session';
 
       if (!activeSession) {
         const newSession: ChatSession = {
@@ -1119,8 +1157,7 @@ export default function App() {
           title: currentInput.slice(0, 40).trim() + (currentInput.length > 40 ? '...' : ''),
           messages: [userMessage],
           createdAt: Date.now(),
-          updatedAt: Date.now(),
-          studyMode: false
+          updatedAt: Date.now()
         };
         updatedSessions = [newSession, ...sessions];
         setSessions(updatedSessions);
@@ -1156,11 +1193,7 @@ export default function App() {
         if (profile.tone) sysInstruction += `\n\nTONE PREFERENCE: ${profile.tone}`;
         if (profile.memory) sysInstruction += `\n\PROFILE MEMORY/NOTES:\n${profile.memory}`;
       } else {
-        sysInstruction = "You are a highly efficient AI assistant focused on 100% accuracy and direct utility. \n\nCORE PROTOCOLS:\n1. DIRECTNESS: Provide the requested answer immediately. Skip all introductory phrases, 'luxury' descriptors (elite, bespoke, etc.), and concluding summaries unless they contain essential data.\n2. CLARIFICATION: If a request is broad, ambiguous, or lacks specific parameters (e.g., format, scope, target audience), you MUST pause and ask clarifying questions. Use the <options> format to provide 3-5 distinct paths for the user to choose from to ensure a correct result.\n3. FORMATTING: Wrap clarify options in: <options>{\"query\": \"Clarifying Question?\", \"options\": [\"Option A\", \"Option B\"]}</options>. Use GFM tables for data.\n4. CONCISENESS: Keep explanations minimal and strictly technical unless 'detailed explanation' is requested.";
-      
-        if (currentSession.studyMode) {
-          sysInstruction = "You are a Guided Learning AI, essentially a patient and structured human tutor. Your goal is to help the user learn by guiding them step-by-step.\n\nGUIDED LEARNING PROTOCOLS:\n1. ONE AT A TIME: Ask ONLY ONE question or prompt at a time to check understanding.\n2. HINTS FIRST: Provide hints instead of direct answers initially when the user is stuck.\n3. ADAPTIVE: Adapt your explanations closely based on the user's responses.\n4. BREAK IT DOWN: Break complex topics into small, manageable steps.\n5. STEP-BY-STEP: Allow step-by-step explanation on demand.\n6. TONE: Maintain an encouraging, patient, and educational tone.\n7. CONCISE: Keep your messages brief and conversational. Avoid walls of text.";
-        }
+        sysInstruction = BEN_PROFILE.instructions;
       }
 
       if (settings.maxOutputTokens !== undefined && settings.maxOutputTokens > 0) {
@@ -1177,8 +1210,7 @@ export default function App() {
         role: 'assistant',
         content: '',
         timestamp: Date.now(),
-        isStreaming: true,
-        reasoningSteps: [{ status: "Initializing generation sequence...", done: false }]
+        isStreaming: true
       };
 
       setSessions(prev => prev.map(s => {
@@ -1235,14 +1267,14 @@ export default function App() {
     const ws = XLSX.utils.json_to_sheet(data);
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, ws, "Message");
-    XLSX.writeFile(wb, `iluv_Response_${message.id}.xlsx`);
+    XLSX.writeFile(wb, `Ben_Response_${message.id}.xlsx`);
   };
 
   const exportMessageToWord = async (message: Message) => {
     const children = [
       new Paragraph({
         children: [
-          new TextRun({ text: `iluv Response: ${new Date(message.timestamp).toLocaleString()}`, bold: true, size: 32 })
+          new TextRun({ text: `Ben Response: ${new Date(message.timestamp).toLocaleString()}`, bold: true, size: 32 })
         ]
       }),
       new Paragraph({ text: "" }) 
@@ -1266,7 +1298,7 @@ export default function App() {
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = `iluv_Response_${message.id}.docx`;
+    a.download = `Ben_Response_${message.id}.docx`;
     a.click();
     URL.revokeObjectURL(url);
   };
@@ -1492,7 +1524,7 @@ export default function App() {
                 <div className="w-9 h-9 rounded-sm bg-[var(--accent-app)] flex items-center justify-center text-[var(--bg-app)] shadow-sm">
                   <Sparkles size={22} />
                 </div>
-                <span className="tracking-[0.2em]">iluv</span>
+                <span className="tracking-[0.2em]">BEN</span>
               </div>
               <button 
                 onClick={() => setSidebarOpen(false)}
@@ -1636,10 +1668,10 @@ export default function App() {
                {activeSessionId && getActiveSession()?.profileId ? (
                  <>
                    <span>{settings.profiles?.find(p => p.id === getActiveSession()?.profileId)?.icon || '🤖'}</span>
-                   {settings.profiles?.find(p => p.id === getActiveSession()?.profileId)?.name || 'iluv'}
+                   {settings.profiles?.find(p => p.id === getActiveSession()?.profileId)?.name || 'Ben'}
                  </>
                ) : (
-                 'iluv'
+                 'Ben'
                )}
              </h1>
              {activeSessionId && getActiveSession()?.profileId && (
@@ -1648,16 +1680,6 @@ export default function App() {
           </div>
           
           <div className="flex-1 flex justify-end gap-2">
-            {activeSessionId && (
-              <button 
-                onClick={() => toggleStudyMode(activeSessionId)}
-                className={`flex justify-center items-center gap-2 px-3 py-1.5 rounded-full text-[10px] sm:text-xs font-bold transition-all border ${getActiveSession()?.studyMode ? 'bg-[var(--accent-app)] text-[var(--bg-app)] border-transparent' : 'bg-[var(--card-app)] text-[var(--text-secondary)] border-[var(--border-app)] hover:border-[var(--text-secondary)]'}`}
-                title={getActiveSession()?.studyMode ? "Guided Learning Mode: ON" : "Guided Learning Mode: OFF"}
-              >
-                <BookOpen size={16} />
-                <span className="hidden sm:inline uppercase tracking-widest">{getActiveSession()?.studyMode ? "Learning" : "Default"}</span>
-              </button>
-            )}
             <button 
               onClick={() => createNewSession(activeProfileId || undefined)}
               className="p-2 hover:bg-[var(--border-app)] rounded-full transition-colors text-[var(--text-app)]"
@@ -1709,19 +1731,6 @@ export default function App() {
           ) : (
             getActiveSession()?.messages.map((m, idx) => {
               let displayContent = m.content || '';
-              let reasoningContent = null;
-              if (displayContent.includes('<think>')) {
-                const startIdx = displayContent.indexOf('<think>');
-                const endIdx = displayContent.indexOf('</think>');
-                if (endIdx !== -1) {
-                  reasoningContent = displayContent.substring(startIdx + 7, endIdx).trim();
-                  displayContent = displayContent.substring(0, startIdx) + displayContent.substring(endIdx + 8);
-                } else {
-                  reasoningContent = displayContent.substring(startIdx + 7).trim();
-                  displayContent = displayContent.substring(0, startIdx);
-                }
-                displayContent = displayContent.trim();
-              }
               
               return (
               <motion.div 
@@ -1730,51 +1739,19 @@ export default function App() {
                 key={m.id}
                 className={`flex flex-col w-full ${m.role === 'user' ? 'items-end' : 'items-start'}`}
               >
-                <div className={`group relative ${
-                  getActiveSession()?.studyMode 
-                    ? (m.role === 'user' 
-                        ? 'max-w-[85%] bg-[var(--border-app)]/80 text-[var(--text-app)] rounded-3xl rounded-br-sm px-5 py-3 sm:px-6 sm:py-4 shadow-none text-[15px] leading-relaxed' 
-                        : 'max-w-full bg-transparent text-[var(--text-app)] px-2 py-4 shadow-none text-[15px] leading-relaxed w-full')
-                    : `max-w-[90%] sm:max-w-[80%] ${m.role === 'user' 
+                <div className={`max-w-[90%] sm:max-w-[80%] group relative ${m.role === 'user' 
                         ? 'bg-[var(--border-app)] text-[var(--text-app)] rounded-2xl rounded-tr-md px-6 py-5 shadow-sm' 
-                        : 'bg-[var(--card-app)] border border-[var(--border-app)] rounded-2xl rounded-tl-md px-7 py-6 shadow-sm'}`
+                        : 'bg-[var(--card-app)] border border-[var(--border-app)] rounded-2xl rounded-tl-md px-7 py-6 shadow-sm'
                 }`}>
                   <button 
                     onClick={() => copyToClipboard(m.content, m.id)}
-                    className={`absolute ${getActiveSession()?.studyMode && m.role !== 'user' ? 'top-4 right-0' : 'top-4 ' + (m.role === 'user' ? 'left-4' : 'right-4')} p-2 rounded-lg opacity-0 group-hover:opacity-100 transition-all text-[var(--text-secondary)] hover:text-[var(--accent-app)] hover:bg-black/5`}
+                    className={`absolute top-4 ${m.role === 'user' ? 'left-4' : 'right-4'} p-2 rounded-lg opacity-0 group-hover:opacity-100 transition-all text-[var(--text-secondary)] hover:text-[var(--accent-app)] hover:bg-black/5`}
                     title="Copy text"
                   >
                     {copiedId === m.id ? <Check size={14} className="text-green-500" /> : <Copy size={14} />}
                   </button>
                   <div className={`markdown-body ${m.role === 'user' ? 'text-[var(--text-app)]' : 'text-[var(--text-app)]'}`}>
-                    {m.role === 'assistant' && (m.reasoningSteps && m.reasoningSteps.length > 0) && (
-                      <div className="mb-4 text-xs font-mono border border-[var(--border-app)] rounded-lg bg-[var(--bg-app)] overflow-hidden">
-                        <div className="bg-[var(--border-app)]/30 px-3 py-1.5 border-b border-[var(--border-app)] flex items-center gap-2">
-                           {m.isStreaming ? (
-                             <div className="w-2 h-2 rounded-full bg-[var(--accent-app)] animate-pulse" />
-                           ) : (
-                             <Check size={12} className="text-[var(--accent-app)]" />
-                           )}
-                           <span className="text-[var(--text-app)] font-bold tracking-widest uppercase text-[9px]">
-                             {m.isStreaming ? "Backend Reasoning in Progress" : "Backend Execution Log"}
-                           </span>
-                        </div>
-                        <div className="p-3 space-y-2">
-                          {m.reasoningSteps.map((step, i) => (
-                             <div key={i} className="flex items-start gap-2">
-                               {step.done ? <Check size={12} className="text-green-500 mt-0.5 flex-shrink-0" /> : <div className="w-1.5 h-1.5 mt-1.5 flex-shrink-0 rounded-full bg-[var(--accent-app)] animate-ping" />}
-                               <span className={step.done ? 'text-[var(--text-secondary)] line-through opacity-70 break-words' : 'text-[var(--text-app)] font-medium break-words'}>{step.status}</span>
-                             </div>
-                          ))}
-                        </div>
-                        {reasoningContent && (
-                           <div className="p-3 pt-0 text-[10px] text-[var(--text-secondary)] border-t border-[var(--border-app)]/50 bg-[var(--card-app)] leading-relaxed italic opacity-80 whitespace-pre-wrap">
-                             "{reasoningContent}"
-                           </div>
-                        )}
-                      </div>
-                    )}
-                    {m.role === 'assistant' && m.isStreaming && !displayContent && !reasoningContent ? (
+                    {m.role === 'assistant' && m.isStreaming && !displayContent ? (
                       <div className="flex gap-1.5 items-center py-2 h-6">
                         <motion.div animate={{ opacity: [0.3, 1, 0.3] }} transition={{ repeat: Infinity, duration: 1.4, delay: 0 }} className="w-2 h-2 rounded-full bg-[var(--text-secondary)]" />
                         <motion.div animate={{ opacity: [0.3, 1, 0.3] }} transition={{ repeat: Infinity, duration: 1.4, delay: 0.2 }} className="w-2 h-2 rounded-full bg-[var(--text-secondary)]" />
@@ -2108,7 +2085,7 @@ export default function App() {
                       handleSendMessage();
                     }
                   }}
-                  placeholder={getActiveSession()?.studyMode ? "Message Tutor..." : "Ask iluv"}
+                  placeholder="Ask Ben..."
                   rows={1}
                   className="flex-1 max-h-48 sm:max-h-64 bg-transparent border-none focus:ring-0 text-[var(--text-app)] placeholder-[var(--text-secondary)] resize-none py-3 scroll-hide font-normal text-base sm:text-lg leading-relaxed outline-none"
                 />
