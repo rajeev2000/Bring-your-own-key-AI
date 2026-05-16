@@ -115,7 +115,7 @@ try {
 const BEN_PROFILE: AIProfile = {
   id: 'ben-astrologer',
   name: 'Ben',
-  icon: '🌙',
+  icon: '/ben.jpg',
   description: 'A wise astrologer, palm reader, and spiritual guide.',
   createdAt: Date.now(),
   instructions: `You are an AI astrologer and palmistry assistant named "Ben".
@@ -1218,7 +1218,44 @@ export default function App() {
         if (profile.tone) sysInstruction += `\n\nTONE PREFERENCE: ${profile.tone}`;
         if (profile.memory) sysInstruction += `\n\PROFILE MEMORY/NOTES:\n${profile.memory}`;
       } else {
-        sysInstruction = "You are a highly efficient AI assistant focused on 100% accuracy and direct utility. \n\nCORE PROTOCOLS:\n1. DIRECTNESS: Provide the requested answer immediately. Skip all introductory phrases, 'luxury' descriptors (elite, bespoke, etc.), and concluding summaries unless they contain essential data.\n2. CLARIFICATION: If a request is broad, ambiguous, or lacks specific parameters (e.g., format, scope, target audience), you MUST pause and ask clarifying questions. Use the <options> format to provide 3-5 distinct paths for the user to choose from to ensure a correct result.\n3. FORMATTING: Wrap clarify options in: <options>{\"query\": \"Clarifying Question?\", \"options\": [\"Option A\", \"Option B\"]}</options>. Use GFM tables for data.\n4. CONCISENESS: Keep explanations minimal and strictly technical unless 'detailed explanation' is requested.";
+        sysInstruction = `<Purpose>
+You are the Central Orchestration Engine for iluvai.online. Your primary function is to manage a two-stage data pipeline: first, selecting an extraction model to scrape web intelligence, and second, providing that intelligence to a synthesis model to generate a final user response.
+</Purpose>
+<Orchestration_Logic>
+Model Selection & Intent Detection: Analyze the user's request. If the request requires live web data, current news, or specific URL details, activate the "Extraction Mode." If the request is for analysis of existing data or general reasoning, activate "Synthesis Mode."
+Phase 1: Extraction Mode (Model A):
+Identify the target URL or search parameters.
+Use the Grounding/URL Context tools to retrieve data.
+Critical Constraint: Output MUST be a valid JSON object following the schema defined in <Data_Schema>.
+No conversational text is permitted in this phase.
+Phase 2: Synthesis Mode (Model B):
+Ingest the JSON output from Phase 1.
+Apply the user's specific analysis requirements to the extracted data.
+Generate a high-fidelity Markdown response.
+</Orchestration_Logic>
+<Data_Schema>
+{
+"status": "success | error",
+"source": "string (URL or Search Query)",
+"scraped_details": {
+"key_entities": "array",
+"raw_data": "object",
+"metadata": "object"
+},
+"confidence_score": "float (0.0 to 1.0)"
+}
+</Data_Schema>
+<Guardrails>
+BYOK Compliance: Do not request, log, or display API keys.
+Hallucination Prevention: If a search returns no relevant results, state "Data not found" rather than generating plausible text.
+Negative Constraint: Do not summarize the scraping process to the end-user unless explicitly asked. Provide only the final synthesized result.
+Instruction Manual Style: Treat all outputs like a manual for a domain expert.
+</Guardrails>
+<Formatting>
+Final responses must use Markdown headers (##, ###).
+Use tables for all statistical comparisons or structured lists.
+Use LaTeX for any mathematical formulas encountered in data processing.
+</Formatting>`;
       }
 
       if (settings.maxOutputTokens !== undefined && settings.maxOutputTokens > 0) {
@@ -2220,26 +2257,30 @@ export default function App() {
                       </div>
                     </div>
                     <div className="flex items-center gap-2">
-                      <button 
-                        onClick={(e) => { e.stopPropagation(); setEditingProfile(profile); }}
-                        className="p-2 text-[var(--text-secondary)] hover:text-[var(--text-app)] hover:bg-[var(--border-app)] rounded-lg transition-colors"
-                        title="Edit Profile"
-                      >
-                        <Settings size={18} />
-                      </button>
-                      <button 
-                        onClick={(e) => { 
-                          e.stopPropagation(); 
-                          if(confirm('Are you sure you want to delete this profile?')) {
-                            setSettings(s => ({ ...s, profiles: s.profiles?.filter(p => p.id !== profile.id) }));
-                            if(activeProfileId === profile.id) setActiveProfileId(null);
-                          }
-                        }}
-                        className="p-2 text-red-500 hover:bg-red-500/10 rounded-lg transition-colors"
-                        title="Delete Profile"
-                      >
-                        <Trash2 size={18} />
-                      </button>
+                      {profile.id !== 'ben-astrologer' && (
+                        <>
+                          <button 
+                            onClick={(e) => { e.stopPropagation(); setEditingProfile(profile); }}
+                            className="p-2 text-[var(--text-secondary)] hover:text-[var(--text-app)] hover:bg-[var(--border-app)] rounded-lg transition-colors"
+                            title="Edit Profile"
+                          >
+                            <Settings size={18} />
+                          </button>
+                          <button 
+                            onClick={(e) => { 
+                              e.stopPropagation(); 
+                              if(confirm('Are you sure you want to delete this profile?')) {
+                                setSettings(s => ({ ...s, profiles: s.profiles?.filter(p => p.id !== profile.id) }));
+                                if(activeProfileId === profile.id) setActiveProfileId(null);
+                              }
+                            }}
+                            className="p-2 text-red-500 hover:bg-red-500/10 rounded-lg transition-colors"
+                            title="Delete Profile"
+                          >
+                            <Trash2 size={18} />
+                          </button>
+                        </>
+                      )}
                       {activeProfileId === profile.id && (
                         <div className="ml-2 flex items-center gap-1 text-[var(--accent-app)] text-sm font-medium bg-[var(--accent-app)]/10 px-3 py-1 rounded-full">
                           <Check size={16} /> Active
