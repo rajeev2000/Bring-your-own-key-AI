@@ -72,6 +72,9 @@ export interface AppSettings {
   chatMemory?: string;
   profiles?: AIProfile[];
   promptTemplates?: PromptTemplate[];
+  orchestrationEnabled?: boolean;
+  extractionModel?: string;
+  synthesisModel?: string;
 }
 
 export const DEFAULT_MODEL = 'gemini-3-flash-preview';

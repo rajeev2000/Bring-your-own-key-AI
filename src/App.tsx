@@ -733,7 +733,22 @@ export default function App() {
         // Delete successful job
         memoryJobsQueue = memoryJobsQueue.filter((j: any) => j.id !== job.id);
 
-        NotificationSystem.sendSuccessNotification("iluv Task Complete", `The response for "${history[history.length - 1]?.content?.slice(0, 30) || 'your prompt'}..." is ready.`);
+        if (job.nextPhaseParams) {
+           memoryJobsQueue.push({
+             id: job.nextPhaseParams.id,
+             sessionId: job.sessionId,
+             model: job.nextPhaseParams.model,
+             provider: job.nextPhaseParams.provider,
+             settings: job.settings,
+             sysInstruction: job.nextPhaseParams.sysInstruction,
+             history: [...history, { role: 'assistant', content: fullText }],
+             startedAt: Date.now(),
+             status: 'pending',
+             retries: 0
+           });
+        } else {
+           NotificationSystem.sendSuccessNotification("iluv Task Complete", `The response for "${history[history.length - 1]?.content?.slice(0, 30) || 'your prompt'}..." is ready.`);
+        }
 
       } catch (err: any) {
         console.error("Job failed:", err);
@@ -1266,43 +1281,102 @@ Use LaTeX for any mathematical formulas encountered in data processing.
         sysInstruction += `\n\nBACKGROUND MEMORY: Below is context from past restored sessions for your reference:\n${settings.chatMemory}\n`;
       }
 
-      const assistantMessageId = generateId();
-      const assistantMessage: Message = {
-        id: assistantMessageId,
-        role: 'assistant',
-        content: '',
-        timestamp: Date.now(),
-        isStreaming: true
-      };
+      if (settings.orchestrationEnabled) {
+        const extMessageId = generateId();
+        const synthMessageId = generateId();
 
-      setSessions(prev => prev.map(s => {
-        if (s.id === sessionId) {
-          return {
-            ...s,
-            messages: [...s.messages, assistantMessage],
-            updatedAt: Date.now()
-          };
+        setSessions(prev => prev.map(s => {
+          if (s.id === sessionId) {
+            return {
+              ...s,
+              messages: [
+                ...s.messages, 
+                { id: extMessageId, role: 'assistant', content: '*[Phase 1] Starting data extraction...*', timestamp: Date.now(), isStreaming: true },
+                { id: synthMessageId, role: 'assistant', content: '*[Phase 2] Waiting for extraction results...*', timestamp: Date.now() + 1, isStreaming: true }
+              ],
+              updatedAt: Date.now()
+            };
+          }
+          return s;
+        }));
+
+        const extModel = settings.extractionModel || model;
+        let extProvider = provider;
+        for (const pt of settings.providers) {
+          const modelsAvailable = fetchedModels[pt.id] || PREDEFINED_MODELS[pt.id] || [];
+          if (modelsAvailable.some(m => m.id === extModel)) extProvider = pt;
         }
-        return s;
-      }));
 
-      const job = {
-         id: assistantMessageId,
-         sessionId,
-         model,
-         provider,
-         settings,
-         sysInstruction,
-         history: currentSession.messages,
-         startedAt: Date.now(),
-         status: 'pending',
-         retries: 0
-      };
+        const synthModel = settings.synthesisModel || model;
+        let synthProvider = provider;
+        for (const pt of settings.providers) {
+          const modelsAvailable = fetchedModels[pt.id] || PREDEFINED_MODELS[pt.id] || [];
+          if (modelsAvailable.some(m => m.id === synthModel)) synthProvider = pt;
+        }
 
-      try {
-        memoryJobsQueue.push(job);
-      } catch(err) {
-        throw new Error("Failed to queue background task.");
+        const job = {
+           id: extMessageId,
+           sessionId,
+           model: extModel,
+           provider: extProvider,
+           settings,
+           sysInstruction: "You are the Phase 1 Extraction Model. Read the user request, fetch/scrape data, and output STRICT JSON format. Do not include conversational text.",
+           history: currentSession.messages,
+           startedAt: Date.now(),
+           status: 'pending',
+           retries: 0,
+           nextPhaseParams: {
+               id: synthMessageId,
+               model: synthModel,
+               provider: synthProvider,
+               sysInstruction: sysInstruction
+           }
+        };
+
+        try {
+          memoryJobsQueue.push(job);
+        } catch(err) {
+          throw new Error("Failed to queue background task.");
+        }
+      } else {
+        const assistantMessageId = generateId();
+        const assistantMessage: Message = {
+          id: assistantMessageId,
+          role: 'assistant',
+          content: '',
+          timestamp: Date.now(),
+          isStreaming: true
+        };
+
+        setSessions(prev => prev.map(s => {
+          if (s.id === sessionId) {
+            return {
+              ...s,
+              messages: [...s.messages, assistantMessage],
+              updatedAt: Date.now()
+            };
+          }
+          return s;
+        }));
+
+        const job = {
+           id: assistantMessageId,
+           sessionId,
+           model,
+           provider,
+           settings,
+           sysInstruction,
+           history: currentSession.messages,
+           startedAt: Date.now(),
+           status: 'pending',
+           retries: 0
+        };
+
+        try {
+          memoryJobsQueue.push(job);
+        } catch(err) {
+          throw new Error("Failed to queue background task.");
+        }
       }
 
     } catch (err: any) {
@@ -2646,6 +2720,64 @@ Use LaTeX for any mathematical formulas encountered in data processing.
                       Dark
                     </button>
                   </div>
+                </div>
+
+                <div className="space-y-6 pt-4 border-t border-[var(--border-app)]">
+                  <div className="flex items-center justify-between mb-4">
+                     <span className="text-[10px] font-semibold uppercase tracking-wider text-[var(--text-secondary)]">Orchestration Pipeline</span>
+                  </div>
+
+                  <div className="flex items-center justify-between">
+                    <label className="text-sm font-medium text-[var(--text-app)]">Enable Two-Stage Extraction &amp; Synthesis</label>
+                    <input 
+                      type="checkbox"
+                      checked={!!settings.orchestrationEnabled}
+                      onChange={(e) => setSettings(s => ({ ...s, orchestrationEnabled: e.target.checked }))}
+                      className="w-5 h-5 accent-[var(--accent-app)] bg-transparent border-[var(--border-app)] rounded-none cursor-pointer"
+                    />
+                  </div>
+
+                  {settings.orchestrationEnabled && (() => {
+                    const allModels = settings.providers.flatMap(p => fetchedModels[p.id] || PREDEFINED_MODELS[p.id] || []).map(m => ({ ...m, providerName: settings.providers.find(p => (fetchedModels[p.id] || PREDEFINED_MODELS[p.id])?.some(x => x.id === m.id))?.name || 'Unknown' }));
+                    const providersSet = Array.from(new Set(allModels.map(m => m.providerName)));
+                    return (
+                    <div className="space-y-4">
+                      <div>
+                        <label className="block text-xs font-medium text-[var(--text-secondary)] mb-1">Extraction Model (Phase 1)</label>
+                        <select
+                          value={settings.extractionModel || ''}
+                          onChange={(e) => setSettings(s => ({ ...s, extractionModel: e.target.value }))}
+                          className="w-full bg-[var(--card-app)] border border-[var(--border-app)] rounded-none py-2 px-3 focus:outline-none focus:ring-1 focus:ring-[var(--accent-app)] transition-all font-mono text-[10px]"
+                        >
+                          <option value="">(Use default)</option>
+                          {providersSet.map(prov => (
+                              <optgroup key={prov} label={prov}>
+                                {allModels.filter(m => m.providerName === prov).map(m => (
+                                  <option key={m.id} value={m.id}>{m.label}</option>
+                                ))}
+                              </optgroup>
+                          ))}
+                        </select>
+                      </div>
+                      <div>
+                        <label className="block text-xs font-medium text-[var(--text-secondary)] mb-1">Synthesis Model (Phase 2)</label>
+                        <select
+                          value={settings.synthesisModel || ''}
+                          onChange={(e) => setSettings(s => ({ ...s, synthesisModel: e.target.value }))}
+                          className="w-full bg-[var(--card-app)] border border-[var(--border-app)] rounded-none py-2 px-3 focus:outline-none focus:ring-1 focus:ring-[var(--accent-app)] transition-all font-mono text-[10px]"
+                        >
+                          <option value="">(Use default)</option>
+                          {providersSet.map(prov => (
+                              <optgroup key={prov} label={prov}>
+                                {allModels.filter(m => m.providerName === prov).map(m => (
+                                  <option key={m.id} value={m.id}>{m.label}</option>
+                                ))}
+                              </optgroup>
+                          ))}
+                        </select>
+                      </div>
+                    </div>
+                  );})()}
                 </div>
 
               </div>
