@@ -1637,7 +1637,7 @@ Use LaTeX for any mathematical formulas encountered in data processing.
 
   // --- UI Components ---
   return (
-    <div className={`p-1 bg-[var(--bg-app)] h-screen overflow-hidden`}>
+    <div className={`p-1 fixed inset-0 bg-[var(--bg-app)] h-[100dvh] overflow-hidden`}>
       <div className={`flex h-full w-full overflow-hidden bg-[var(--bg-app)] text-[var(--text-app)] border-[3px] rounded-2xl transition-all duration-300 ${loadingSessions.size > 0 ? 'animate-rainbow-glow border-transparent' : 'border-transparent'}`}>
         {/* Sidebar */}
       <AnimatePresence>
@@ -1778,7 +1778,7 @@ Use LaTeX for any mathematical formulas encountered in data processing.
       </AnimatePresence>
 
       {/* Main Content */}
-      <div className="relative flex-1 flex flex-col min-w-0 bg-[var(--bg-app)]">
+      <div className="relative flex-1 flex flex-col min-w-0 min-h-0 bg-[var(--bg-app)]">
         <AnimatePresence />
         {!sidebarOpen && (
           <button 
@@ -1790,7 +1790,7 @@ Use LaTeX for any mathematical formulas encountered in data processing.
         )}
 
         {/* Header */}
-        <header className="h-16 flex items-center justify-between px-4 sm:px-6 sticky top-0 z-10 transition-all">
+        <header className="h-16 flex items-center justify-between px-4 sm:px-6 flex-shrink-0 z-10 transition-all bg-[var(--bg-app)]">
           <div className="flex-1 flex justify-start">
              <button 
                 onClick={() => setSidebarOpen(true)}
@@ -2065,7 +2065,7 @@ Use LaTeX for any mathematical formulas encountered in data processing.
         </div>
 
         {/* Interraction Area (Input & Controls) */}
-        <div className="relative border-t border-[var(--border-app)] bg-[var(--bg-app)] p-2 sm:p-10 transition-all">
+        <div className="relative flex-shrink-0 border-t border-[var(--border-app)] bg-[var(--bg-app)] p-2 sm:p-10 transition-all z-10">
           <div className="max-w-5xl mx-auto space-y-4 sm:space-y-6">
             
             <AnimatePresence />
