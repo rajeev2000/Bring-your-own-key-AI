@@ -1637,8 +1637,9 @@ Use LaTeX for any mathematical formulas encountered in data processing.
 
   // --- UI Components ---
   return (
-    <div className="flex h-screen overflow-hidden bg-[var(--bg-app)] text-[var(--text-app)]">
-      {/* Sidebar */}
+    <div className={`p-1 bg-[var(--bg-app)] h-screen overflow-hidden`}>
+      <div className={`flex h-full w-full overflow-hidden bg-[var(--bg-app)] text-[var(--text-app)] border-[3px] rounded-2xl transition-all duration-300 ${loadingSessions.size > 0 ? 'animate-rainbow-glow border-transparent' : 'border-transparent'}`}>
+        {/* Sidebar */}
       <AnimatePresence>
         {sidebarOpen && (
           <>
@@ -1875,10 +1876,15 @@ Use LaTeX for any mathematical formulas encountered in data processing.
                 key={m.id}
                 className={`flex flex-col w-full ${m.role === 'user' ? 'items-end' : 'items-start'}`}
               >
-                <div className={`max-w-[90%] sm:max-w-[80%] group relative ${m.role === 'user' 
+                <div className={`max-w-[90%] sm:max-w-[80%] group relative transition-all duration-300 ${m.role === 'user' 
                         ? 'bg-[var(--border-app)] text-[var(--text-app)] rounded-2xl rounded-tr-md px-6 py-5 shadow-sm' 
                         : 'bg-[var(--card-app)] border border-[var(--border-app)] rounded-2xl rounded-tl-md px-7 py-6 shadow-sm'
                 }`}>
+                  {m.role === 'assistant' && (
+                    <div className="sr-only" aria-live="polite" aria-atomic="true">
+                      {m.isStreaming ? "Generating response..." : "Response loaded."}
+                    </div>
+                  )}
                   <button 
                     onClick={() => copyToClipboard(m.content, m.id)}
                     className={`absolute top-4 ${m.role === 'user' ? 'left-4' : 'right-4'} p-2 rounded-lg opacity-0 group-hover:opacity-100 transition-all text-[var(--text-secondary)] hover:text-[var(--accent-app)] hover:bg-black/5`}
@@ -3077,6 +3083,7 @@ Use LaTeX for any mathematical formulas encountered in data processing.
           </div>
         )}
       </AnimatePresence>
+      </div>
 
     </div>
   );
