@@ -1,17 +1,14 @@
 User-agent: *
 Allow: /
-Disallow: /app/
 Disallow: /api/
 
 # Explicitly allow AI bots for content discovery
 User-agent: GPTBot
 Allow: /
 Allow: /news
-Disallow: /app/
 
 User-agent: PerplexityBot
 Allow: /
 Allow: /news
-Disallow: /app/
 
 Sitemap: https://www.iluvai.online/sitemap.xml
