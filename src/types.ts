@@ -46,6 +46,7 @@ export interface ChatSession {
   updatedAt: number;
   isArchived?: boolean;
   profileId?: string;
+  pinnedAt?: number;
 }
 
 export interface ProviderConfig {

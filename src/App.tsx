@@ -39,7 +39,8 @@ import {
   BookOpen,
   Menu,
   SquarePen,
-  LayoutTemplate
+  LayoutTemplate,
+  Pin
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import ReactMarkdown from 'react-markdown';
@@ -1008,6 +1009,16 @@ export default function App() {
     }
   };
 
+  const togglePin = (e: React.MouseEvent, id: string) => {
+    e.stopPropagation();
+    setSessions(prev => prev.map(s => {
+      if (s.id === id) {
+        return { ...s, pinnedAt: s.pinnedAt ? undefined : Date.now() };
+      }
+      return s;
+    }));
+  };
+
   const calculateSimilarity = (s1: string, s2: string) => {
     const set1 = new Set(s1.split(/\s+/));
     const set2 = new Set(s2.split(/\s+/));
@@ -1682,38 +1693,76 @@ Use LaTeX for any mathematical formulas encountered in data processing.
             </div>
 
             <div className="flex-1 overflow-y-auto p-4 space-y-2 custom-scrollbar">
-              {sessions.filter(s => !s.isArchived).map(s => (
-                <div 
-                  key={s.id}
-                  onClick={() => { setActiveSessionId(s.id); setError(null); }}
-                  className={`group relative flex items-center gap-3 p-3 rounded-none cursor-pointer transition-all ${
-                    activeSessionId === s.id 
-                      ? 'bg-[var(--card-app)] shadow-sm border border-[var(--border-app)]' 
-                      : 'hover:bg-[var(--border-app)]'
-                  }`}
-                >
-                  <div className={`flex items-center justify-center w-6 h-6 shrink-0 ${activeSessionId === s.id ? 'text-[var(--accent-app)]' : 'text-[var(--text-app)] opacity-60'}`}>
-                    {s.profileId && settings.profiles?.find(p => p.id === s.profileId) ? (
-                      <ProfileIcon icon={settings.profiles.find(p => p.id === s.profileId)!.icon} className="text-lg leading-none w-5 h-5 rounded-sm" />
-                    ) : (
-                      <MessageSquare size={18} />
+              {(() => {
+                const unarchived = sessions.filter(s => !s.isArchived);
+                const pinned = unarchived.filter(s => s.pinnedAt).sort((a, b) => (b.pinnedAt || 0) - (a.pinnedAt || 0));
+                const unpinned = unarchived.filter(s => !s.pinnedAt);
+                
+                const renderSessionItem = (s: ChatSession) => (
+                  <div 
+                    key={s.id}
+                    onClick={() => { setActiveSessionId(s.id); setError(null); }}
+                    className={`group relative flex items-center gap-3 p-3 rounded-none cursor-pointer transition-all ${
+                      activeSessionId === s.id 
+                        ? 'bg-[var(--card-app)] shadow-sm border border-[var(--border-app)]' 
+                        : 'hover:bg-[var(--border-app)]'
+                    }`}
+                  >
+                    <div className={`flex items-center justify-center w-6 h-6 shrink-0 ${activeSessionId === s.id ? 'text-[var(--accent-app)]' : 'text-[var(--text-app)] opacity-60'}`}>
+                      {s.profileId && settings.profiles?.find(p => p.id === s.profileId) ? (
+                        <ProfileIcon icon={settings.profiles.find(p => p.id === s.profileId)!.icon} className="text-lg leading-none w-5 h-5 rounded-sm" />
+                      ) : (
+                        <MessageSquare size={18} />
+                      )}
+                    </div>
+                    <div className="flex-1 overflow-hidden">
+                      <div className="text-sm font-bold truncate tracking-tight text-[var(--text-app)]">{s.title}</div>
+                      <div className="text-[10px] text-[var(--text-secondary)] mt-0.5 uppercase tracking-wider font-medium">{new Date(s.updatedAt).toLocaleDateString()}</div>
+                    </div>
+                    <div className="absolute right-3 top-1/2 -translate-y-1/2 flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                      <button 
+                        onClick={(e) => togglePin(e, s.id)}
+                        className={`p-1.5 transition-colors ${s.pinnedAt ? 'text-[var(--accent-app)]' : 'text-[var(--text-secondary)] hover:text-[var(--text-app)]'}`}
+                        title={s.pinnedAt ? "Unpin chat" : "Pin chat"}
+                      >
+                        <Pin size={16} fill={s.pinnedAt ? "currentColor" : "none"} />
+                      </button>
+                      <button 
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          deleteSession(s.id);
+                        }}
+                        className="p-1.5 hover:text-red-500 transition-colors text-[var(--text-secondary)]"
+                        title="Delete chat"
+                      >
+                        <Trash2 size={16} />
+                      </button>
+                    </div>
+                    {/* Always show pin icon if pinned but not hovered */}
+                    {s.pinnedAt && (
+                      <div className="absolute right-3 top-1/2 -translate-y-1/2 flex items-center gap-1 opacity-100 group-hover:opacity-0 transition-opacity">
+                        <div className="p-1.5 text-[var(--text-secondary)]">
+                          <Pin size={16} fill="currentColor" />
+                        </div>
+                      </div>
                     )}
                   </div>
-                  <div className="flex-1 overflow-hidden">
-                    <div className="text-sm font-bold truncate tracking-tight text-[var(--text-app)]">{s.title}</div>
-                    <div className="text-[10px] text-[var(--text-secondary)] mt-0.5 uppercase tracking-wider font-medium">{new Date(s.updatedAt).toLocaleDateString()}</div>
-                  </div>
-                  <button 
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      deleteSession(s.id);
-                    }}
-                    className="opacity-0 group-hover:opacity-100 p-1.5 hover:text-red-500 transition-opacity text-[var(--text-app)]"
-                  >
-                    <Trash2 size={16} />
-                  </button>
-                </div>
-              ))}
+                );
+
+                return (
+                  <>
+                    {pinned.length > 0 && (
+                      <div className="text-[10px] font-bold text-[var(--text-secondary)] uppercase tracking-widest px-2 pb-1 pt-2">Pinned</div>
+                    )}
+                    {pinned.map(s => renderSessionItem(s))}
+                    
+                    {pinned.length > 0 && unpinned.length > 0 && (
+                      <div className="text-[10px] font-bold text-[var(--text-secondary)] uppercase tracking-widest px-2 pb-1 pt-4 mt-2 border-t border-[var(--border-app)]">Recent</div>
+                    )}
+                    {unpinned.map(s => renderSessionItem(s))}
+                  </>
+                );
+              })()}
             </div>
 
             <div className="p-4 border-t border-[var(--border-app)] flex flex-col gap-2 relative">
