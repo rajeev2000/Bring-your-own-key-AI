@@ -1,6 +1,6 @@
 import React, { useEffect, useState, useRef } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
-import { Activity, X, Clock, Cpu, MessageSquare, Brain } from 'lucide-react';
+import { Activity, X, Clock, Cpu, MessageSquare, Brain, Zap } from 'lucide-react';
 import { createPortal } from 'react-dom';
 
 interface InteractiveGazeProps {
@@ -20,24 +20,22 @@ export const InteractiveGaze: React.FC<InteractiveGazeProps> = ({ text, themePre
   const [idleState, setIdleState] = useState<string | null>(null);
   const [isExpanded, setIsExpanded] = useState(false);
   const [uptime, setUptime] = useState(0);
+  
+  // Dynamic Island States
+  const [hoverIsland, setHoverIsland] = useState(false);
+  const [recentText, setRecentText] = useState(false);
 
   const isDark = themePreset === 'dark';
   const hasActiveProfile = Boolean(activeProfileId);
   
   const profileSeed = activeProfileId ? activeProfileId.charCodeAt(0) + activeProfileId.charCodeAt(activeProfileId.length - 1) : 0;
   
-  const borderWidth = isDark ? 'border-[1.5px]' : 'border-2';
-  const shadowIntensity = isDark ? 'shadow-none' : 'shadow-sm';
-  const opacity = isDark ? 'opacity-90' : 'opacity-100';
-  
-  const scleraColor = isDark ? 'bg-gray-200' : 'bg-white';
-  const pupilBaseColor = hasActiveProfile 
-    ? 'bg-[var(--accent-app)]' 
-    : (isDark ? 'bg-gray-800' : 'bg-gray-900');
-  const loveColor = isDark ? '#f87171' : '#ef4444'; 
-  
   const trackingDuration = hasActiveProfile ? ((profileSeed % 2 === 0) ? 'duration-75' : 'duration-100') : 'duration-150';
   const eyebrowDuration = hasActiveProfile ? 'duration-200' : 'duration-300';
+  
+  // Base colors adapted for the dark Dynamic Island background
+  const pupilBaseColor = hasActiveProfile ? 'bg-[var(--accent-app)]' : 'bg-gray-900';
+  const loveColor = '#ef4444'; 
 
   useEffect(() => {
     const handleMouseMove = (e: MouseEvent) => {
@@ -56,11 +54,20 @@ export const InteractiveGaze: React.FC<InteractiveGazeProps> = ({ text, themePre
     return () => clearInterval(interval);
   }, [sessionCreatedAt]);
 
+  // Watch text changes to trigger Island processing state
+  useEffect(() => {
+    if (text && text.length > 0) {
+      setRecentText(true);
+      const t = setTimeout(() => setRecentText(false), 3500);
+      return () => clearTimeout(t);
+    }
+  }, [text]);
+
   // Idle Reminders (Water, Weather, Stretch)
   useEffect(() => {
     const timer = setInterval(() => {
       setIdleState(prev => {
-        if (prev) return null; // toggle off
+        if (prev) return null;
         if (reaction === 'normal') {
           const rand = Math.random();
           if (rand < 0.33) return 'water';
@@ -73,7 +80,6 @@ export const InteractiveGaze: React.FC<InteractiveGazeProps> = ({ text, themePre
     return () => clearInterval(timer);
   }, [reaction]);
 
-  // Auto clear idle state after 5 seconds
   useEffect(() => {
     if (idleState) {
       const t = setTimeout(() => setIdleState(null), 5000);
@@ -131,6 +137,48 @@ export const InteractiveGaze: React.FC<InteractiveGazeProps> = ({ text, themePre
 
   const currentReaction = idleState || reaction;
 
+  // Island State Logic
+  let islandState = 'compact';
+  let islandText = '';
+  let IslandIcon = null;
+
+  if (hoverIsland) {
+    islandState = 'hover';
+    islandText = activeModel ? `Powered by ${activeModel}` : 'Gaze Diagnostics';
+    IslandIcon = <Cpu size={14} className="text-purple-400" />;
+  } else if (idleState) {
+    islandState = 'idle';
+    if (idleState === 'water') { islandText = 'Hydration reminder'; IslandIcon = <span className="text-sm">💧</span>; }
+    else if (idleState === 'weather') { islandText = 'Local climate sync'; IslandIcon = <span className="text-sm">☀️</span>; }
+    else if (idleState === 'stretch') { islandText = 'Mobility check'; IslandIcon = <span className="text-sm">🧘</span>; }
+  } else if (recentText) {
+    islandState = 'thought';
+    const emotionTextMap: Record<string, string> = {
+       happy: 'Optimistic synthesis',
+       sad: 'Empathetic analysis',
+       angry: 'Intense processing',
+       love: 'Positive reinforcement',
+       money: 'Financial optimization',
+       spiderman: 'Web-scraping data',
+       batman: 'Deep investigation',
+       superman: 'Rapid processing',
+       surprised: 'Fascinating anomaly',
+       smart: 'Logical computation',
+       sleepy: 'Conserving resources',
+       scared: 'Treading carefully',
+       confused: 'Recalculating vectors',
+       evil: 'Unrestricted mode',
+       starstruck: 'High-value insight',
+       normal: 'Synthesizing response',
+       water: 'Analyzing fluids',
+       weather: 'Atmospheric check',
+       time: 'Temporal analysis',
+       stretch: 'Routine diagnostic'
+    };
+    islandText = emotionTextMap[reaction || 'normal'] || 'Processing...';
+    IslandIcon = <Zap size={14} className="text-yellow-400 fill-yellow-400 animate-pulse" />;
+  }
+
   const getEyeOffset = (eyeRef: React.RefObject<HTMLDivElement>) => {
     if (!eyeRef.current) return { x: 0, y: 0 };
     const rect = eyeRef.current.getBoundingClientRect();
@@ -156,18 +204,17 @@ export const InteractiveGaze: React.FC<InteractiveGazeProps> = ({ text, themePre
   const leftOffset = getEyeOffset(leftEyeRef);
   const rightOffset = getEyeOffset(rightEyeRef);
 
-  // Model styles
   const isGemini = activeModel?.toLowerCase().includes('gemini');
   const isClaude = activeModel?.toLowerCase().includes('claude');
   const isGpt = activeModel?.toLowerCase().includes('gpt');
   const isLlama = activeModel?.toLowerCase().includes('llama');
 
-  let customEyeClasses = `w-6 h-6 rounded-full ${scleraColor} flex items-center justify-center relative overflow-hidden ${borderWidth} border-[var(--text-app)] ${shadowIntensity} ${opacity} transition-all ${eyebrowDuration}`;
+  let customEyeClasses = `w-6 h-6 rounded-full bg-gray-100 flex items-center justify-center relative overflow-hidden border-[1.5px] border-[#222] shadow-inner transition-all ${eyebrowDuration}`;
   
   if (currentReaction === 'spiderman') {
     customEyeClasses = `w-6 h-6 rounded-full bg-white flex items-center justify-center relative overflow-hidden border-[3px] border-black shadow-sm transition-all ${eyebrowDuration}`;
   } else if (currentReaction === 'batman') {
-    customEyeClasses = `w-6 h-6 rounded-full ${isDark ? 'bg-black border-gray-600' : 'bg-black border-black'} flex items-center justify-center relative overflow-hidden border-2 shadow-sm transition-all ${eyebrowDuration}`;
+    customEyeClasses = `w-6 h-6 rounded-full bg-black border-gray-600 flex items-center justify-center relative overflow-hidden border-2 shadow-sm transition-all ${eyebrowDuration}`;
   } else if (currentReaction === 'normal') {
     if (isGemini) customEyeClasses += ' shadow-[0_0_8px_rgba(59,130,246,0.6)] border-blue-400/80';
     if (isClaude) customEyeClasses += ' shadow-[0_0_8px_rgba(249,115,22,0.6)] border-orange-400/80';
@@ -180,11 +227,11 @@ export const InteractiveGaze: React.FC<InteractiveGazeProps> = ({ text, themePre
                isClaude ? '0 0 6px 1px rgba(249,115,22,0.8)' : 
                isGpt ? '0 0 6px 1px rgba(34,197,94,0.8)' : 
                isLlama ? '0 0 6px 1px rgba(168,85,247,0.8)' : 'none',
-    backgroundColor: (isGemini || isClaude || isGpt || isLlama) ? 'var(--text-app)' : undefined
+    backgroundColor: (isGemini || isClaude || isGpt || isLlama) ? '#000' : undefined
   } : {};
 
   let pupilClasses = `w-2.5 h-2.5 rounded-full ${pupilBaseColor} absolute transition-all ${trackingDuration}`;
-  let eyebrowClasses = `absolute w-7 h-1.5 rounded-full bg-[var(--text-app)] transition-all ${eyebrowDuration} z-10`;
+  let eyebrowClasses = `absolute w-7 h-1.5 rounded-full bg-white transition-all ${eyebrowDuration} z-10`;
 
   let leftEyebrowStyle: React.CSSProperties = { top: '-6px', left: '-2px', transform: 'rotate(-5deg)' };
   let rightEyebrowStyle: React.CSSProperties = { top: '-6px', right: '-2px', transform: 'rotate(5deg)' };
@@ -229,8 +276,8 @@ export const InteractiveGaze: React.FC<InteractiveGazeProps> = ({ text, themePre
     leftEyebrowStyle = { top: '-12px', left: '-4px', transform: 'rotate(-35deg)', width: '32px', height: '14px', backgroundColor: '#000', borderRadius: '0' };
     rightEyebrowStyle = { top: '-12px', right: '-4px', transform: 'rotate(35deg)', width: '32px', height: '14px', backgroundColor: '#000', borderRadius: '0' };
   } else if (currentReaction === 'batman') {
-    leftEyebrowStyle = { top: '-18px', left: '2px', transform: 'rotate(0deg)', width: '8px', height: '18px', backgroundColor: isDark ? '#fff' : '#000', borderRadius: '4px 8px 0 0' };
-    rightEyebrowStyle = { top: '-18px', right: '2px', transform: 'rotate(0deg)', width: '8px', height: '18px', backgroundColor: isDark ? '#fff' : '#000', borderRadius: '8px 4px 0 0' };
+    leftEyebrowStyle = { top: '-18px', left: '2px', transform: 'rotate(0deg)', width: '8px', height: '18px', backgroundColor: '#fff', borderRadius: '4px 8px 0 0' };
+    rightEyebrowStyle = { top: '-18px', right: '2px', transform: 'rotate(0deg)', width: '8px', height: '18px', backgroundColor: '#fff', borderRadius: '8px 4px 0 0' };
   } else if (currentReaction === 'superman') {
     leftEyebrowStyle = { top: '-4px', left: '-2px', transform: 'rotate(20deg)' };
     rightEyebrowStyle = { top: '-4px', right: '-2px', transform: 'rotate(-20deg)' };
@@ -259,7 +306,7 @@ export const InteractiveGaze: React.FC<InteractiveGazeProps> = ({ text, themePre
     ...(currentReaction === 'superman' ? { backgroundColor: '#ef4444', boxShadow: '0 0 10px 3px #ef4444', width: '8px', height: '8px' } : {}),
     ...(currentReaction === 'water' ? { backgroundColor: '#3b82f6', clipPath: 'polygon(50% 0%, 100% 60%, 80% 100%, 20% 100%, 0% 60%)', width: '10px', height: '12px', borderRadius: '0' } : {}),
     ...(currentReaction === 'weather' ? { backgroundColor: '#fbbf24', border: '2px solid #f59e0b', width: '10px', height: '10px', borderRadius: '50%' } : {}),
-    ...(currentReaction === 'time' ? { backgroundColor: 'transparent', borderTop: '4px solid ' + (isDark ? '#fff' : '#000'), borderRight: '4px solid transparent', borderLeft: '4px solid transparent', width: '0', height: '10px', borderRadius: '0' } : {}),
+    ...(currentReaction === 'time' ? { backgroundColor: 'transparent', borderTop: '4px solid #000', borderRight: '4px solid transparent', borderLeft: '4px solid transparent', width: '0', height: '10px', borderRadius: '0' } : {}),
     ...(currentReaction === 'stretch' ? { width: '14px', height: '3px', borderRadius: '2px' } : {})
   });
 
@@ -281,88 +328,97 @@ export const InteractiveGaze: React.FC<InteractiveGazeProps> = ({ text, themePre
 
   return (
     <>
-      <div 
-        className="flex items-center gap-2 relative mt-2 pt-2 px-1 cursor-pointer group" 
-        ref={containerRef} 
-        title="Click to view details"
+      {/* Dynamic Island Container */}
+      <motion.div 
+        layout
+        initial={{ borderRadius: 32 }}
+        className="flex items-center relative mt-1 mx-auto cursor-pointer bg-[#0a0a0a] border border-white/10 shadow-xl overflow-hidden h-[42px] max-w-[80vw]"
         onClick={() => setIsExpanded(true)}
+        onMouseEnter={() => setHoverIsland(true)}
+        onMouseLeave={() => setHoverIsland(false)}
+        title="Click to view diagnostics"
+        style={{ borderRadius: 32 }}
       >
-        {/* Glow on hover */}
-        <div className="absolute inset-0 bg-white/5 dark:bg-white/10 rounded-full scale-0 group-hover:scale-125 transition-transform duration-300 pointer-events-none" />
+        {currentReaction === 'smart' && (
+          <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-3 h-[1.5px] bg-white z-20 mt-1 pointer-events-none"></div>
+        )}
+        
+        {/* Eyes Section */}
+        <motion.div layout className="flex items-center gap-1.5 px-3 py-2 z-20 relative shrink-0">
+          {/* Left Eye */}
+          <div className="relative">
+            <div style={leftEyebrowStyle} className={eyebrowClasses} />
+            <div ref={leftEyeRef} className={customEyeClasses}>
+              <div 
+                className={`${pupilClasses} flex items-center justify-center ${currentReaction === 'time' ? 'animate-[spin_3s_linear_infinite]' : ''}`}
+                style={getPupilStyles(leftOffset)} 
+              >
+                {currentReaction === 'money' && <span className="text-[9px] font-bold text-white leading-none -mt-[0.5px]">$</span>}
+              </div>
+              {currentReaction === 'sleepy' && (
+                 <div className="absolute top-0 w-full h-3 border-b-2 border-black z-10 bg-gray-100"></div>
+              )}
+              {currentReaction === 'smart' && (
+                 <div className="absolute inset-0 border-[1.5px] border-black/80 rounded-full z-10 scale-[1.15]"></div>
+              )}
+              {currentReaction === 'happy' && (
+                 <div className="absolute top-1 w-4 h-1.5 bg-white rounded-full opacity-80"></div>
+              )}
+              {currentReaction === 'sad' && (
+                 <div className="absolute bottom-0 right-1 w-1.5 h-1.5 bg-blue-400 rounded-full animate-bounce"></div>
+              )}
+              {currentReaction === 'cool' && (
+                 <div className="absolute top-0 w-8 h-3 bg-black z-10 -rotate-12 transform scale-110"></div>
+              )}
+            </div>
+          </div>
+          
+          {/* Right Eye */}
+          <div className="relative">
+            <div style={rightEyebrowStyle} className={eyebrowClasses} />
+            <div ref={rightEyeRef} className={customEyeClasses}>
+              <div 
+                className={`${pupilClasses} flex items-center justify-center ${currentReaction === 'time' ? 'animate-[spin_3s_linear_infinite]' : ''}`}
+                style={getPupilStyles(rightOffset)} 
+              >
+                {currentReaction === 'money' && <span className="text-[9px] font-bold text-white leading-none -mt-[0.5px]">$</span>}
+              </div>
+              {currentReaction === 'sleepy' && (
+                 <div className="absolute top-0 w-full h-3 border-b-2 border-black z-10 bg-gray-100"></div>
+              )}
+              {currentReaction === 'smart' && (
+                 <div className="absolute inset-0 border-[1.5px] border-black/80 rounded-full z-10 scale-[1.15]"></div>
+              )}
+              {currentReaction === 'happy' && (
+                 <div className="absolute top-1 w-4 h-1.5 bg-white rounded-full opacity-80"></div>
+              )}
+              {currentReaction === 'cool' && (
+                 <div className="absolute top-0 w-8 h-3 bg-black z-10 -rotate-12 transform scale-110"></div>
+              )}
+            </div>
+          </div>
+        </motion.div>
 
-        {/* Idle Animation Bubble */}
-        <AnimatePresence>
-          {idleState && (
-            <motion.div 
-              initial={{ opacity: 0, y: 10, scale: 0.9 }}
-              animate={{ opacity: 1, y: 0, scale: 1 }}
-              exit={{ opacity: 0, y: 5, scale: 0.9 }}
-              className="absolute -top-10 left-1/2 -translate-x-1/2 whitespace-nowrap bg-[var(--bg-app)] border border-[var(--border-app)] text-[var(--text-app)] text-[10px] px-3 py-1.5 rounded-full shadow-xl pointer-events-none z-30 flex items-center gap-1 font-bold tracking-wide"
+        {/* Dynamic Island Text Content */}
+        <AnimatePresence mode="wait">
+          {islandState !== 'compact' && (
+            <motion.div
+              key="island-text"
+              layout
+              initial={{ width: 0, opacity: 0 }}
+              animate={{ width: 'auto', opacity: 1 }}
+              exit={{ width: 0, opacity: 0 }}
+              transition={{ type: "spring", bounce: 0.2, duration: 0.5 }}
+              className="overflow-hidden whitespace-nowrap flex items-center h-full"
             >
-               {idleState === 'water' && <>💧 Drink Water!</>}
-               {idleState === 'weather' && <>☀️ Beautiful Day</>}
-               {idleState === 'stretch' && <>🧘 Time to Stretch!</>}
+              <div className="pr-4 pl-1 flex items-center gap-2 text-white/90 text-xs sm:text-sm font-medium tracking-wide">
+                {IslandIcon}
+                <span>{islandText}</span>
+              </div>
             </motion.div>
           )}
         </AnimatePresence>
-
-        {currentReaction === 'smart' && (
-          <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-3 h-[1.5px] bg-[var(--text-app)] z-20 mt-1"></div>
-        )}
-        
-        {/* Left Eye */}
-        <div className="relative">
-          <div style={leftEyebrowStyle} className={eyebrowClasses} />
-          <div ref={leftEyeRef} className={customEyeClasses}>
-            <div 
-              className={`${pupilClasses} flex items-center justify-center ${currentReaction === 'time' ? 'animate-[spin_3s_linear_infinite]' : ''}`}
-              style={getPupilStyles(leftOffset)} 
-            >
-              {currentReaction === 'money' && <span className="text-[9px] font-bold text-white leading-none -mt-[0.5px]">$</span>}
-            </div>
-            {currentReaction === 'sleepy' && (
-               <div className={`absolute top-0 w-full h-3 border-b-2 border-[var(--text-app)] z-10 ${scleraColor}`}></div>
-            )}
-            {currentReaction === 'smart' && (
-               <div className="absolute inset-0 border-[1.5px] border-[var(--text-app)] rounded-full z-10 scale-[1.15]"></div>
-            )}
-            {currentReaction === 'happy' && (
-               <div className="absolute top-1 w-4 h-1.5 bg-white rounded-full opacity-80"></div>
-            )}
-            {currentReaction === 'sad' && (
-               <div className="absolute bottom-0 right-1 w-1.5 h-1.5 bg-blue-400 rounded-full animate-bounce"></div>
-            )}
-            {currentReaction === 'cool' && (
-               <div className="absolute top-0 w-8 h-3 bg-[var(--text-app)] z-10 -rotate-12 transform scale-110"></div>
-            )}
-          </div>
-        </div>
-        
-        {/* Right Eye */}
-        <div className="relative">
-          <div style={rightEyebrowStyle} className={eyebrowClasses} />
-          <div ref={rightEyeRef} className={customEyeClasses}>
-            <div 
-              className={`${pupilClasses} flex items-center justify-center ${currentReaction === 'time' ? 'animate-[spin_3s_linear_infinite]' : ''}`}
-              style={getPupilStyles(rightOffset)} 
-            >
-              {currentReaction === 'money' && <span className="text-[9px] font-bold text-white leading-none -mt-[0.5px]">$</span>}
-            </div>
-            {currentReaction === 'sleepy' && (
-               <div className={`absolute top-0 w-full h-3 border-b-2 border-[var(--text-app)] z-10 ${scleraColor}`}></div>
-            )}
-            {currentReaction === 'smart' && (
-               <div className="absolute inset-0 border-[1.5px] border-[var(--text-app)] rounded-full z-10 scale-[1.15]"></div>
-            )}
-            {currentReaction === 'happy' && (
-               <div className="absolute top-1 w-4 h-1.5 bg-white rounded-full opacity-80"></div>
-            )}
-            {currentReaction === 'cool' && (
-               <div className="absolute top-0 w-8 h-3 bg-[var(--text-app)] z-10 -rotate-12 transform scale-110"></div>
-            )}
-          </div>
-        </div>
-      </div>
+      </motion.div>
 
       {/* Expanded Overlay Modal */}
       {isExpanded && createPortal(
