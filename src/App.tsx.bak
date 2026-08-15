@@ -1851,9 +1851,19 @@ Use LaTeX for any mathematical formulas encountered in data processing.
           </div>
           
           <div className="flex-1 flex justify-center flex-col items-center cursor-pointer hover:opacity-80 transition-opacity" onClick={() => setShowProfilesList(true)} title="Switch AI Profile">
-            <div className="pointer-events-none mt-2">
-               <InteractiveGaze text={getActiveSession()?.messages.filter(m => m.role === 'assistant').pop()?.content || input} themePreset={settings.themePreset} activeProfileId={activeSessionId ? getActiveSession()?.profileId : undefined} />
-            </div>
+            <h1 className="text-xl font-medium tracking-tight text-[var(--text-app)] flex items-center gap-2">
+               {activeSessionId && getActiveSession()?.profileId ? (
+                 <>
+                   <ProfileIcon icon={settings.profiles?.find(p => p.id === getActiveSession()?.profileId)?.icon} className="w-8 h-8 rounded-full" />
+                   {settings.profiles?.find(p => p.id === getActiveSession()?.profileId)?.name || 'iluv'}
+                 </>
+               ) : (
+                 'iluv'
+               )}
+             </h1>
+             {activeSessionId && getActiveSession()?.profileId && (
+               <span className="text-[10px] text-[var(--text-secondary)] uppercase tracking-widest font-bold">AI Profile Active</span>
+             )}
           </div>
           
           <div className="flex-1 flex justify-end gap-2">
@@ -2232,6 +2242,9 @@ Use LaTeX for any mathematical formulas encountered in data processing.
                 )}
               </AnimatePresence>
 
+              <div className="flex justify-center -mb-3 relative z-20 pointer-events-none">
+                 <InteractiveGaze text={input} />
+              </div>
 
               <div className="flex items-end gap-2 bg-[var(--card-app)] border border-[var(--border-app)] focus-within:border-[var(--accent-app)] rounded-3xl p-2 pl-4 transition-all shadow-md">
                 <div className="flex items-center pb-2">
