@@ -1851,8 +1851,15 @@ Use LaTeX for any mathematical formulas encountered in data processing.
           </div>
           
           <div className="flex-1 flex justify-center flex-col items-center cursor-pointer hover:opacity-80 transition-opacity" onClick={() => setShowProfilesList(true)} title="Switch AI Profile">
-            <div className="pointer-events-none mt-2">
-               <InteractiveGaze text={getActiveSession()?.messages.filter(m => m.role === 'assistant').pop()?.content || input} themePreset={settings.themePreset} activeProfileId={activeSessionId ? getActiveSession()?.profileId : undefined} />
+            <div className="mt-2 pointer-events-auto" onClick={e => e.stopPropagation()}>
+               <InteractiveGaze 
+                 text={getActiveSession()?.messages.filter(m => m.role === 'assistant').pop()?.content || input} 
+                 themePreset={settings.themePreset} 
+                 activeProfileId={activeSessionId ? getActiveSession()?.profileId : undefined} 
+                 activeModel={settings.model} 
+                 sessionCreatedAt={getActiveSession()?.createdAt}
+                 messageCount={getActiveSession()?.messages.length || 0}
+               />
             </div>
           </div>
           
