@@ -6,6 +6,12 @@ export default function Compare() {
       <Helmet>
         <title>LUX vs TypingMind vs AiZolo | BYOK AI Platform Comparison</title>
         <meta name="description" content="Compare LUX with TypingMind and AiZolo. Discover why LUX offers superior multi-model simultaneous chat, zero platform fees, and developer API optimization." />
+        <link rel="canonical" href="https://iluvai.online/compare" />
+        <meta property="og:title" content="LUX vs TypingMind vs AiZolo | BYOK AI Platform Comparison" />
+        <meta property="og:description" content="Compare LUX with TypingMind and AiZolo. Discover why LUX offers superior multi-model simultaneous chat, zero platform fees, and developer API optimization." />
+        <meta property="og:url" content="https://iluvai.online/compare" />
+        <meta name="twitter:title" content="LUX vs TypingMind vs AiZolo | BYOK AI Platform Comparison" />
+        <meta name="twitter:description" content="Compare LUX with TypingMind and AiZolo. Discover why LUX offers superior multi-model simultaneous chat, zero platform fees, and developer API optimization." />
       </Helmet>
 
       {/* Answer Capsule (TL;DR) */}

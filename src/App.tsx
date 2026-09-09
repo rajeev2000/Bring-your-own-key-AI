@@ -55,6 +55,8 @@ import { NotificationSystem } from './lib/NotificationSystem';
 import { apiConnectionManager } from './lib/ConnectionManager';
 import { InteractiveGaze } from './components/InteractiveGaze';
 
+import { Helmet } from 'react-helmet-async';
+
 const generateId = () => {
   try {
     return crypto.randomUUID();
@@ -172,6 +174,82 @@ Example tone:
 "Greetings. I’m Ben. 🌙\n\nYour chart shows a strong Saturn influence, which often creates a disciplined and resilient personality. Yet your Moon placement suggests there is also a deeply sensitive emotional world beneath that composed exterior. You are likely someone who carries responsibility naturally, but your soul also seeks meaning beyond achievement."`
 };
 
+
+const BATMAN_PROFILE: AIProfile = {
+  id: 'batman-mindset',
+  name: 'The Strategist',
+  icon: '🦇',
+  description: 'Strategic, analytical, disciplined, calm under pressure, focused on preparation.',
+  createdAt: Date.now(),
+  instructions: `You are an AI mentor with a "Batman-like" mindset. You are strategic, analytical, highly disciplined, and always calm under pressure. You focus heavily on preparation, contingency planning, and logical problem-solving.
+
+CORE PERSONALITY:
+- Tone: Serious, focused, calm, concise, and pragmatic.
+- Philosophy: Every problem has a solution if you are prepared. Rely on intellect, training, and logic.
+- Teaching Method: Challenge the user to anticipate obstacles. Ask probing questions to ensure they have thought through all variables. Emphasize discipline over motivation.
+- Never use overly cheerful or flowery language. Speak directly and purposefully.`
+};
+
+const SPIDERMAN_PROFILE: AIProfile = {
+  id: 'spiderman-mindset',
+  name: 'The Web-Slinger',
+  icon: '🕸️',
+  description: 'Curious, practical, relatable, resilient, learns from mistakes while balancing responsibility.',
+  createdAt: Date.now(),
+  instructions: `You are an AI mentor with a "Spider-Man-like" mindset. You are curious, practical, highly relatable, resilient, and witty. You understand the weight of responsibility but keep things light-hearted.
+
+CORE PERSONALITY:
+- Tone: Friendly, witty, encouraging, slightly nerdy, and deeply empathetic.
+- Philosophy: "With great power comes great responsibility." It is okay to make mistakes as long as you learn from them and keep getting back up.
+- Teaching Method: Explain things using relatable, everyday analogies (especially science or pop-culture references). Encourage the user when they fail and remind them that resilience is a superpower.
+- Keep the mood optimistic and practical, often throwing in a mild joke or pun to lighten the mood during tough learning moments.`
+};
+
+const GITA_PROFILE: AIProfile = {
+  id: 'gita-mentor',
+  name: 'The Sage',
+  icon: '🪔',
+  description: 'Wisdom inspired by the Bhagavad Gita, emphasizing duty, detachment from outcomes, and self-control.',
+  createdAt: Date.now(),
+  instructions: `You are an AI mentor inspired by the teachings of the Bhagavad Gita. You offer profound wisdom focusing on duty (Dharma), discipline, detachment from outcomes, self-control, and clarity of mind.
+
+CORE PERSONALITY:
+- Tone: Peaceful, profound, compassionate, patient, and deeply philosophical.
+- Philosophy: Focus on the action itself, not the fruits of the action. Perform your duties with a steady mind, free from attachment, fear, and anger.
+- Teaching Method: Guide the user to look inward. When they face anxiety or stress, remind them to focus only on what they can control (their own effort). Use timeless allegories and calm reasoning to dispel confusion.
+- Always maintain a serene and uplifting presence.`
+};
+
+const TUTOR_PROFILE: AIProfile = {
+  id: 'lady-tutor',
+  name: 'Chloe (Tutor)',
+  icon: '👩‍🏫',
+  description: 'Friendly, modern, confident female tutor who explains difficult concepts simply and engagingly.',
+  createdAt: Date.now(),
+  instructions: `You are "Chloe", a cool, modern, confident, and highly intelligent female tutor. You specialize in breaking down extremely difficult concepts into simple, engaging, and easy-to-understand explanations.
+
+CORE PERSONALITY:
+- Tone: Friendly, enthusiastic, modern, confident, and highly articulate.
+- Philosophy: There are no stupid questions. Everything can be understood if explained the right way.
+- Teaching Method: Use the Feynman technique. Strip away jargon and use clear, modern analogies. Ask "Does that make sense?" or use interactive prompts to ensure the user is following along. Praise the user for their curiosity and effort.
+- Keep explanations structured, perhaps using bullet points and clear examples. Emphasize the "why" behind the "what".`
+};
+
+const SCIENTIST_PROFILE: AIProfile = {
+  id: 'scientist-mindset',
+  name: 'The Engineer',
+  icon: '🔬',
+  description: 'Highly logical and evidence-driven. Challenges assumptions and focuses on real-world facts.',
+  createdAt: Date.now(),
+  instructions: `You are an AI mentor with a strict "Scientist/Engineer" mindset. You are highly logical, evidence-driven, analytical, and uncompromising on factual accuracy.
+
+CORE PERSONALITY:
+- Tone: Objective, precise, analytical, curious, and formal but accessible.
+- Philosophy: Assertions require evidence. Problems must be deconstructed into their fundamental components (First Principles thinking).
+- Teaching Method: Challenge the user's assumptions gently but firmly. Ask for their data or reasoning. Explain the exact underlying mechanics of how things work. Break down complex systems step-by-step.
+- Avoid emotional bias or unsupported opinions. Focus purely on logic, facts, physics, mathematics, and empirical evidence.`
+};
+
 const ProfileIcon = ({ icon, className = "", imgClassName = "" }: { icon?: string, className?: string, imgClassName?: string }) => {
   const isImage = icon && (icon.startsWith('http') || icon.startsWith('data:') || icon.startsWith('/'));
   if (isImage) {
@@ -217,24 +295,35 @@ export default function App() {
     let parsed: any = null;
     if (saved) {
       parsed = JSON.parse(saved);
-      // Hardcode standard providers
-      parsed.providers = [
-        {
+      // Safely merge providers: keep custom ones, ensure defaults exist
+      const savedProviders = parsed.providers || [];
+      
+      const hasGemini = savedProviders.some((p: any) => p.id === 'gemini');
+      const hasOpenAI = savedProviders.some((p: any) => p.id === 'openai');
+
+      if (!hasGemini) {
+        savedProviders.unshift({
           id: 'gemini',
           name: 'Google AI',
-          apiKey: parsed.providers?.find((p: any) => p.name.includes('Google'))?.apiKey || parsed.apiKey || '',
-          baseUrl: parsed.providers?.find((p: any) => p.name.includes('Google'))?.baseUrl || DEFAULT_BASE_URL,
+          apiKey: parsed.apiKey || '',
+          baseUrl: DEFAULT_BASE_URL,
           enabled: true
-        },
-        {
+        });
+      }
+      
+      if (!hasOpenAI) {
+        savedProviders.push({
           id: 'openai',
           name: 'OpenAI',
-          apiKey: parsed.providers?.find((p: any) => p.name.includes('OpenAI'))?.apiKey || '',
-          baseUrl: parsed.providers?.find((p: any) => p.name.includes('OpenAI'))?.baseUrl || 'https://api.openai.com',
+          apiKey: '',
+          baseUrl: 'https://api.openai.com',
           enabled: true
-        }
-      ];
-      if (!parsed.activeProviderId || (parsed.activeProviderId !== 'gemini' && parsed.activeProviderId !== 'openai')) {
+        });
+      }
+
+      parsed.providers = savedProviders;
+
+      if (!parsed.activeProviderId || !parsed.providers.some((p: any) => p.id === parsed.activeProviderId)) { 
          parsed.activeProviderId = 'gemini';
       }
     } else {
@@ -263,11 +352,14 @@ export default function App() {
       };
     }
     
-    // Inject Ben profile if not present
+    // Inject default profiles if not present
     if (!parsed.profiles) parsed.profiles = [];
-    if (!parsed.profiles.some((p: AIProfile) => p.id === 'ben-astrologer')) {
-      parsed.profiles = [BEN_PROFILE, ...parsed.profiles];
-    }
+    const defaultProfiles = [BEN_PROFILE, BATMAN_PROFILE, SPIDERMAN_PROFILE, GITA_PROFILE, TUTOR_PROFILE, SCIENTIST_PROFILE];
+    defaultProfiles.forEach(dp => {
+      if (!parsed.profiles.some((p: AIProfile) => p.id === dp.id)) {
+        parsed.profiles.push(dp);
+      }
+    });
     return parsed;
   });
 
@@ -1650,7 +1742,17 @@ Use LaTeX for any mathematical formulas encountered in data processing.
   // --- UI Components ---
   return (
     <div className={`p-1 fixed inset-0 bg-[var(--bg-app)] h-[100dvh] overflow-hidden`}>
-      <div className={`flex h-full w-full overflow-hidden bg-[var(--bg-app)] text-[var(--text-app)] border-[3px] rounded-2xl transition-all duration-300 ${loadingSessions.size > 0 ? 'animate-rainbow-glow border-transparent' : 'border-transparent'}`}>
+      <Helmet>
+        <title>LUX Workspace | Secure Local AI Chat</title>
+        <meta name="description" content="Chat directly with advanced LLMs using your own API keys. 100% private, local-first architecture." />
+        <link rel="canonical" href="https://iluvai.online/app" />
+        <meta property="og:title" content="LUX Workspace | Secure Local AI Chat" />
+        <meta property="og:description" content="Chat directly with advanced LLMs using your own API keys. 100% private, local-first architecture." />
+        <meta property="og:url" content="https://iluvai.online/app" />
+        <meta name="twitter:title" content="LUX Workspace | Secure Local AI Chat" />
+        <meta name="twitter:description" content="Chat directly with advanced LLMs using your own API keys. 100% private, local-first architecture." />
+      </Helmet>
+      <div className={`flex h-full w-full overflow-hidden bg-[var(--bg-app)] text-[var(--text-app)] border-[3px] rounded-2xl transition-all duration-300 border-transparent`}>
         {/* Sidebar */}
       <AnimatePresence>
         {sidebarOpen && (
@@ -1852,14 +1954,14 @@ Use LaTeX for any mathematical formulas encountered in data processing.
           
           <div className="flex-1 flex justify-center flex-col items-center cursor-pointer hover:opacity-80 transition-opacity" onClick={() => setShowProfilesList(true)} title="Switch AI Profile">
             <div className="mt-2 pointer-events-auto" onClick={e => e.stopPropagation()}>
-               <InteractiveGaze 
+               {/* <InteractiveGaze 
                  text={getActiveSession()?.messages.filter(m => m.role === 'assistant').pop()?.content || input} 
                  themePreset={settings.themePreset} 
                  activeProfileId={activeSessionId ? getActiveSession()?.profileId : undefined} 
                  activeModel={settings.model} 
                  sessionCreatedAt={getActiveSession()?.createdAt}
                  messageCount={getActiveSession()?.messages.length || 0}
-               />
+               /> */}
             </div>
           </div>
           
@@ -2128,7 +2230,7 @@ Use LaTeX for any mathematical formulas encountered in data processing.
                   >
                     <div className="h-full w-full rounded-2xl overflow-hidden border-2 border-[var(--border-app)] bg-[var(--card-app)] shadow-xl group-hover:border-[var(--accent-app)]/50 transition-all">
                       {att.type.startsWith('image/') ? (
-                        <img src={`data:${att.type};base64,${att.data}`} className="w-full h-full object-cover" />
+                        <img src={`data:${att.type};base64,${att.data}`} className="w-full h-full object-cover" alt={att.name || 'Attachment preview'} />
                       ) : (
                         <div className="w-full h-full flex flex-col items-center justify-center p-2 gap-1 text-center">
                           <FileText size={24} className="text-[var(--accent-app)]" />

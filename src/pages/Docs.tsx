@@ -6,6 +6,12 @@ export default function Docs() {
       <Helmet>
         <title>Setup Guide & API Integration Documentation | LUX</title>
         <meta name="description" content="Learn how to connect OpenAI, Anthropic, Google GenAI, and Ollama API keys to the LUX interface in under a minute." />
+        <link rel="canonical" href="https://iluvai.online/docs" />
+        <meta property="og:title" content="Setup Guide & API Integration Documentation | LUX" />
+        <meta property="og:description" content="Learn how to connect OpenAI, Anthropic, Google GenAI, and Ollama API keys to the LUX interface in under a minute." />
+        <meta property="og:url" content="https://iluvai.online/docs" />
+        <meta name="twitter:title" content="Setup Guide & API Integration Documentation | LUX" />
+        <meta name="twitter:description" content="Learn how to connect OpenAI, Anthropic, Google GenAI, and Ollama API keys to the LUX interface in under a minute." />
       </Helmet>
 
       {/* Sidebar Navigation */}

@@ -6,6 +6,12 @@ export default function Features() {
       <Helmet>
         <title>AI Aggregator Features | Local Memory & Multi-Model Routing | LUX</title>
         <meta name="description" content="Explore LUX's BYOK features: local-first memory, multi-provider routing (OpenAI, Anthropic, Google, Ollama), and unhindered VIP access." />
+        <link rel="canonical" href="https://iluvai.online/features" />
+        <meta property="og:title" content="AI Aggregator Features | Local Memory & Multi-Model Routing | LUX" />
+        <meta property="og:description" content="Explore LUX's BYOK features: local-first memory, multi-provider routing (OpenAI, Anthropic, Google, Ollama), and unhindered VIP access." />
+        <meta property="og:url" content="https://iluvai.online/features" />
+        <meta name="twitter:title" content="AI Aggregator Features | LUX" />
+        <meta name="twitter:description" content="Local-first memory, multi-provider routing, and unhindered VIP access." />
       </Helmet>
 
       {/* Answer Capsule (TL;DR) */}

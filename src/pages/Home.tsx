@@ -27,14 +27,56 @@ export default function Home() {
     ]
   };
 
+  const softwareSchema = {
+    "@context": "https://schema.org",
+    "@type": "SoftwareApplication",
+    "name": "LUX AI Aggregator",
+    "operatingSystem": "Web",
+    "applicationCategory": "UtilitiesApplication",
+    "description": "Ultra-premium BYOK AI Aggregator. Access GPT-4o, Claude 3.5, and Gemini 3.1 directly via developer APIs at wholesale rates.",
+    "offers": {
+      "@type": "Offer",
+      "price": "0",
+      "priceCurrency": "USD"
+    }
+  };
+
+  const organizationSchema = {
+    "@context": "https://schema.org",
+    "@type": "Organization",
+    "name": "LUX",
+    "url": "https://iluvai.online/",
+    "logo": "https://iluvai.online/app-interface.png",
+    "sameAs": [
+      "https://twitter.com/iluvai",
+      "https://github.com/iluvai"
+    ]
+  };
+
+  const websiteSchema = {
+    "@context": "https://schema.org",
+    "@type": "WebSite",
+    "name": "LUX AI",
+    "url": "https://iluvai.online/"
+  };
+
   return (
     <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-20 flex flex-col items-center">
       <Helmet>
         <title>LUX: Ultra-Premium BYOK AI Aggregator | Direct API Access</title>
         <meta name="description" content="Bring your own API key to LUX. Access GPT-4o, Claude 3.5, and Gemini 3.1 directly via developer APIs at wholesale transaction rates." />
+        <link rel="canonical" href="https://iluvai.online/" />
+        <meta property="og:title" content="LUX: Ultra-Premium BYOK AI Aggregator" />
+        <meta property="og:description" content="Access top AI models directly via developer APIs. Absolute local-first privacy where your keys never leave your browser." />
+        <meta property="og:url" content="https://iluvai.online/" />
+        <meta name="twitter:title" content="LUX: Ultra-Premium BYOK AI Aggregator" />
+        <meta name="twitter:description" content="Stop paying full-priced consumer subscriptions and access top AI models directly." />
       </Helmet>
       {/* JSON-LD for SEO */}
       <script type="application/ld+json" dangerouslySetInnerHTML={{ __html: JSON.stringify(faqSchema) }} />
+      <script type="application/ld+json" dangerouslySetInnerHTML={{ __html: JSON.stringify(softwareSchema) }} />
+      <script type="application/ld+json" dangerouslySetInnerHTML={{ __html: JSON.stringify(organizationSchema) }} />
+      <script type="application/ld+json" dangerouslySetInnerHTML={{ __html: JSON.stringify(websiteSchema) }} />
 
       {/* Answer Capsule (TL;DR) */}
       <div className="text-sm bg-[var(--card-app)] border border-[var(--border-app)] p-4 rounded-lg mb-8 max-w-4xl w-full" aria-label="TL;DR Summary">

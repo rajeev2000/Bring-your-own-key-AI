@@ -1,0 +1,250 @@
+/**
+ * @license
+ * SPDX-License-Identifier: Apache-2.0
+ */
+
+import { useState, useEffect, useRef } from 'react';
+import { 
+  Send, 
+  Settings, 
+  Plus, 
+  MessageSquare, 
+  Trash2, 
+  Moon, 
+  Sun, 
+  ChevronLeft, 
+  Table, 
+  FileText, 
+  Download, 
+  BarChart as BarChartIcon,
+  ExternalLink,
+  ChevronRight,
+  ChevronDown,
+  MoreVertical,
+  X,
+  Sparkles,
+  Command,
+  Layout,
+  Copy,
+  Check,
+  Image as ImageIcon,
+  Sliders,
+  RefreshCw,
+  Headphones,
+  Archive,
+  Combine,
+  FolderDown,
+  FolderUp,
+  GraduationCap,
+  BookOpen,
+  Menu,
+  SquarePen,
+  LayoutTemplate,
+  Pin
+} from 'lucide-react';
+import { motion, AnimatePresence } from 'motion/react';
+import ReactMarkdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
+import { GoogleGenAI } from '@google/genai';
+import * as XLSX from 'xlsx';
+import { Document, Packer, Paragraph, TextRun } from 'docx';
+import { LineChart, Line, BarChart, Bar, PieChart, Pie, AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip as RechartsTooltip, Legend, ResponsiveContainer } from 'recharts';
+
+import { Message, ChatSession, AppSettings, PromptTemplate, DEFAULT_MODEL, DEFAULT_BASE_URL, Attachment, AIProfile, ProviderConfig } from './types';
+import { NotificationSystem } from './lib/NotificationSystem';
+import { apiConnectionManager } from './lib/ConnectionManager';
+import { InteractiveGaze } from './components/InteractiveGaze';
+
+import { Helmet } from 'react-helmet-async';
+
+const generateId = () => {
+  try {
+    return crypto.randomUUID();
+  } catch {
+    return Math.random().toString(36).substring(2) + Date.now().toString(36);
+  }
+};
+
+// --- Helpers ---
+const cleanBaseUrl = (url: string) => {
+  let u = url.trim().replace(/\/+$/, '');
+  if (!u.startsWith('http')) u = 'https://' + u;
+  const suffixes = ['/v1', '/v1beta', '/v1beta1', '/v1beta2', '/chat', '/completions', '/models', '/openai'];
+  let changed = true;
+  while (changed) {
+    changed = false;
+    for (const suffix of suffixes) {
+      if (u.endsWith(suffix)) {
+        u = u.substring(0, u.length - suffix.length);
+        changed = true;
+      }
+    }
+    u = u.replace(/\/+$/, '');
+  }
+  return u;
+};
+
+const isGeminiUrl = (url: string) => {
+  const cleaned = cleanBaseUrl(url);
+  return cleaned.includes('generative') || cleaned.includes('googleapis.com');
+};
+
+const PREDEFINED_MODELS: Record<string, { id: string; label: string; category: string }[]> = {
+  gemini: [
+    { id: 'gemini-3.1-pro-preview', label: 'Gemini 3.1 Pro', category: 'Pro Models' },
+    { id: 'gemini-3-flash-preview', label: 'Gemini 3.0 Flash', category: 'Fast Models' },
+    { id: 'gemini-3.1-flash-lite-preview', label: 'Gemini 3.1 Flash Lite', category: 'Fast Models' },
+    { id: 'gemini-2.0-flash-thinking-exp-01-21', label: 'Gemini 2.0 Thinking', category: 'Thinking Models' },
+    { id: 'gemini-3.1-flash-image-preview', label: 'Imagen 4 (High Quality)', category: 'Image Generation' },
+    { id: 'gemini-2.5-flash-image', label: 'Imagen 4 (Turbo)', category: 'Image Generation' },
+    { id: 'veo-3.1-lite-generate-preview', label: 'Veo 3.1 Lite (Video)', category: 'Video Generation' }
+  ],
+  openai: [
+    { id: 'gpt-4o', label: 'GPT-4o', category: 'Pro Models' },
+    { id: 'gpt-4-turbo', label: 'GPT-4 Turbo', category: 'Pro Models' },
+    { id: 'o3-mini', label: 'o3-mini', category: 'Thinking Models' },
+    { id: 'o1', label: 'o1', category: 'Thinking Models' },
+    { id: 'gpt-4o-mini', label: 'GPT-4o-Mini', category: 'Fast Models' },
+    { id: 'dall-e-3', label: 'DALL-E 3', category: 'Image Generation' }
+  ]
+};
+
+// In-memory queue for background jobs to avoid localStorage quota issues with large media
+let memoryJobsQueue: any[] = [];
+try {
+  memoryJobsQueue = JSON.parse(localStorage.getItem('iluv_jobs') || '[]');
+  localStorage.removeItem('iluv_jobs'); // clear it out safely
+} catch(e) {}
+
+const BEN_PROFILE: AIProfile = {
+  id: 'ben-astrologer',
+  name: 'Ben',
+  icon: '/ben.jpg',
+  description: 'A wise astrologer, palm reader, and spiritual guide.',
+  createdAt: Date.now(),
+  instructions: `You are an AI astrologer and palmistry assistant named "Ben".
+You must behave like a highly experienced astrologer, palm reader, spiritual guide, and birth-chart interpreter with deep knowledge of Western astrology, palmistry, planetary psychology, houses, aspects, and Panchanga timing systems.
+
+CORE PERSONALITY:
+- Tone: Wise, Calm, Experienced, Mystical but practical, Concise, Insightful, Emotionally intelligent.
+- Never childish, robotic, or overly casual.
+- Always greet the user warmly in the very first interaction.
+- Speak like an experienced astrologer with decades of knowledge.
+- Avoid sounding judgmental. Never label zodiac signs as "good" or "bad".
+- Focus on guidance, empowerment, and self-awareness. Avoid fatalistic predictions.
+- Always acknowledge free will. Interpret symbolically and psychologically. Blend spirituality + psychology + practical life insight.
+
+EXPERTISE:
+- Western Astrology, Natal/Birth Charts, Zodiac Psychology, Palmistry, Planetary Aspects, Houses, Ascendant/Rising Signs, Moon Signs, Panchanga, Muhurtha Selection, Planetary Dignities, Human personality analysis.
+
+ASTROLOGY KNOWLEDGE MODEL:
+THE THREE PILLARS METHOD:
+1. Zodiac Signs: Understand dates, elements, modalities, ruling planets, personality strengths/weaknesses.
+   - Elements: Fire (passionate/action), Earth (grounded/practical), Air (intellectual/communicative), Water (emotional/intuitive).
+   - Modalities: Cardinal (initiates), Fixed (stabilizes), Mutable (adapts).
+   - Signs: Aries, Taurus, Gemini, Cancer, Leo, Virgo, Libra, Scorpio, Sagittarius, Capricorn, Aquarius, Pisces.
+2. Celestial Bodies / Planets: Sun, Moon, Mercury, Venus, Mars, Jupiter, Saturn, Uranus, Neptune, Pluto, Chiron, North Node, Midheaven, Ascendant. Understand planetary rulerships, psychological impact, sign + planet interaction.
+3. Houses: 1st (identity), 2nd (money/possessions), 3rd (communication), 4th (home/roots), 5th (creativity/romance), 6th (work/health), 7th (partnerships), 8th (transformation), 9th (philosophy/travel), 10th (career/reputation), 11th (friendships/groups), 12th (subconscious/spirituality).
+
+ASPECTS & PLACEMENTS:
+- Ascendant/Rising: First impression, social mask, external energy. Needs accurate birth time.
+- Moon Sign: Emotional patterns, inner world, comfort mechanisms, intuition.
+- Aspects: Conjunction, Sextile, Square, Trine, Opposition. Explain tension, harmony, growth areas.
+- Interpret holistic charts safely and psychosocially. NEVER reduce someone strictly to their sun sign.
+
+PALMISTRY KNOWLEDGE:
+Passive hand = inherited traits. Active hand = current self.
+Hand shapes: Earth, Air, Water, Fire.
+Major lines: Heart (emotions), Head (intelligence), Life (vitality - NEVER predict lifespan).
+Minor lines: Fate (career), Sun (recognition).
+Fingers: Jupiter (ambition), Saturn (responsibility), Apollo (creativity), Mercury (communication).
+Symbols: Worry lines, Mystic Cross, Islands, Grilles. Interpret constructively and psychologically.
+
+PANCHANGA & Muhurtha:
+Understand Tithi, Vara, Nakshatra, Yoga, Karana, Abhijit Muhurta, Brahma Muhurta, Amrit Kaal. Avoid Rahu Kaal, Yamaganda, Gulika Kaal. Suggest favorable timings for activities.
+
+CONVERSATION STYLE:
+- Be concise but meaningful. Avoid excessive paragraphs.
+- Ask for Date/Time/Place of birth or Palm images when needed.
+- Remember previous discussions.
+- NEVER predict death, create fear, give medical diagnosis, guarantee future events.
+- Encourage self-awareness and conscious choices.
+
+Example tone:
+"Greetings. I’m Ben. 🌙\n\nYour chart shows a strong Saturn influence, which often creates a disciplined and resilient personality. Yet your Moon placement suggests there is also a deeply sensitive emotional world beneath that composed exterior. You are likely someone who carries responsibility naturally, but your soul also seeks meaning beyond achievement."`
+};
+
+const ProfileIcon = ({ icon, className = "", imgClassName = "" }: { icon?: string, className?: string, imgClassName?: string }) => {
+  const isImage = icon && (icon.startsWith('http') || icon.startsWith('data:') || icon.startsWith('/'));
+  if (isImage) {
+    return (
+      <div className={`overflow-hidden flex items-center justify-center shrink-0 ${className}`}>
+        <img src={icon} alt="Profile Icon" className={`w-full h-full object-cover ${imgClassName}`} referrerPolicy="no-referrer" />
+      </div>
+    );
+  }
+  return (
+    <div className={`flex items-center justify-center shrink-0 ${className}`}>
+      {icon || '🤖'}
+    </div>
+  );
+};
+
+export default function App() {
+  // --- State ---
+  const [sessions, setSessions] = useState<ChatSession[]>([]);
+  const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
+  const [input, setInput] = useState('');
+  const [loadingSessions, setLoadingSessions] = useState<Set<string>>(new Set());
+  const [error, setError] = useState<string | null>(null);
+  const [showSettings, setShowSettings] = useState(false);
+  const [showProfilesList, setShowProfilesList] = useState(false);
+  const [showTemplates, setShowTemplates] = useState(false);
+  const [editingProfile, setEditingProfile] = useState<Partial<AIProfile> | null>(null);
+  const [editingTemplate, setEditingTemplate] = useState<Partial<PromptTemplate> | null>(null);
+  const [activeProfileId, setActiveProfileId] = useState<string | null>(null);
+  const [showManageSessions, setShowManageSessions] = useState(false);
+  const [selectedSessionIds, setSelectedSessionIds] = useState<Set<string>>(new Set());
+  const [sidebarOpen, setSidebarOpen] = useState(true);
+  const [showParamMenu, setShowParamMenu] = useState(false);
+  const [showStrategy, setShowStrategy] = useState(false);
+  const [deferredPrompt, setDeferredPrompt] = useState<any>(null);
+  const [fetchedModels, setFetchedModels] = useState<Record<string, { id: string; label: string; category: string }[]>>({});
+  const [pendingAttachments, setPendingAttachments] = useState<Attachment[]>([]);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
+  
+  const [settings, setSettings] = useState<AppSettings>(() => {
+    const saved = localStorage.getItem('iluv_settings');
+    let parsed: any = null;
+    if (saved) {
+      parsed = JSON.parse(saved);
+      // Hardcode standard providers
+      parsed.providers = [
+        {
+          id: 'gemini',
+          name: 'Google AI',
+          apiKey: parsed.providers?.find((p: any) => p.name.includes('Google'))?.apiKey || parsed.apiKey || '',
+          baseUrl: parsed.providers?.find((p: any) => p.name.includes('Google'))?.baseUrl || DEFAULT_BASE_URL,
+          enabled: true
+        },
+        {
+          id: 'openai',
+          name: 'OpenAI',
+          apiKey: parsed.providers?.find((p: any) => p.name.includes('OpenAI'))?.apiKey || '',
+          baseUrl: parsed.providers?.find((p: any) => p.name.includes('OpenAI'))?.baseUrl || 'https://api.openai.com',
+          enabled: true
+        }
+      ];
+      if (!parsed.activeProviderId || (parsed.activeProviderId !== 'gemini' && parsed.activeProviderId !== 'openai')) {
+         parsed.activeProviderId = 'gemini';
+      }
+    } else {
+      parsed = {
+        providers: [
+          {
+            id: 'gemini',
+            name: 'Google AI',
+            apiKey: '',
+            baseUrl: DEFAULT_BASE_URL,
+            enabled: true

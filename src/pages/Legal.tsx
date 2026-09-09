@@ -6,6 +6,12 @@ export default function Legal() {
       <Helmet>
         <title>Legal & Privacy Policy | Free Local App Architecture | LUX</title>
         <meta name="description" content="Read our transparent Privacy Policy and Terms of Service. Understand our local-first implementation, API responsibility, and zero-retention infrastructure." />
+        <link rel="canonical" href="https://iluvai.online/legal" />
+        <meta property="og:title" content="Legal & Privacy Policy | Free Local App Architecture | LUX" />
+        <meta property="og:description" content="Read our transparent Privacy Policy and Terms of Service. Understand our local-first implementation, API responsibility, and zero-retention infrastructure." />
+        <meta property="og:url" content="https://iluvai.online/legal" />
+        <meta name="twitter:title" content="Legal & Privacy Policy | Free Local App Architecture | LUX" />
+        <meta name="twitter:description" content="Read our transparent Privacy Policy and Terms of Service. Understand our local-first implementation, API responsibility, and zero-retention infrastructure." />
       </Helmet>
 
       <h1 className="text-4xl font-bold mb-12 uppercase tracking-tight">Legal & Privacy</h1>

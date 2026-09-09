@@ -7,6 +7,12 @@ export default function TrustCenter() {
       <Helmet>
         <title>Zero Data Retention Privacy & Security Architecture | LUX</title>
         <meta name="description" content="Discover LUX's local-first architecture. Your API keys and conversational data never leave your browser. Absolute sovereign AI privacy." />
+        <link rel="canonical" href="https://iluvai.online/trust-center" />
+        <meta property="og:title" content="Zero Data Retention Privacy & Security Architecture | LUX" />
+        <meta property="og:description" content="Discover LUX's local-first architecture. Your API keys and conversational data never leave your browser. Absolute sovereign AI privacy." />
+        <meta property="og:url" content="https://iluvai.online/trust-center" />
+        <meta name="twitter:title" content="Zero Data Retention Privacy & Security Architecture | LUX" />
+        <meta name="twitter:description" content="Discover LUX's local-first architecture. Your API keys and conversational data never leave your browser. Absolute sovereign AI privacy." />
       </Helmet>
 
       {/* Answer Capsule (TL;DR) */}

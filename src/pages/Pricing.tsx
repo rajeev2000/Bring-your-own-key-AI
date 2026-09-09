@@ -6,6 +6,12 @@ export default function Pricing() {
       <Helmet>
         <title>$0 Subscription AI Access | Wholesale BYOK Pricing | LUX</title>
         <meta name="description" content="Stop paying monthly AI subscriptions. LUX provides a $0 platform fee—you only pay the wholesale API token rates directly to providers." />
+        <link rel="canonical" href="https://iluvai.online/pricing" />
+        <meta property="og:title" content="$0 Subscription AI Access | Wholesale BYOK Pricing | LUX" />
+        <meta property="og:description" content="Stop paying monthly AI subscriptions. LUX provides a $0 platform fee—you only pay the wholesale API token rates directly to providers." />
+        <meta property="og:url" content="https://iluvai.online/pricing" />
+        <meta name="twitter:title" content="$0 Subscription AI Access | Wholesale BYOK Pricing | LUX" />
+        <meta name="twitter:description" content="LUX provides a $0 platform fee—you only pay the wholesale API token rates directly to providers." />
       </Helmet>
 
       {/* Answer Capsule (TL;DR) */}
